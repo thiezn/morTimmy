@@ -3,6 +3,7 @@
 *.swp
 *.log
 .DS_Store
+
 # Ignore sphinx docstring config and makefile and my bash script for generating the docs
 generateDocs.sh         
 raspberrypi/docs/conf.py
