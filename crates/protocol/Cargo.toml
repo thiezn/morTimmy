@@ -1,0 +1,16 @@
+[package]
+name = "mortimmy-protocol"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+cobs.workspace = true
+crc.workspace = true
+heapless.workspace = true
+mortimmy-core = { path = "../core" }
+postcard.workspace = true
+serde.workspace = true

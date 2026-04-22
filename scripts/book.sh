@@ -1,14 +1,17 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-###############################################
-# Configuration
-###############################################
-BOOK_DIR="$(dirname "$(realpath "$0")")/../docs"
+
+
+ROOT_DIR="$(dirname "$(realpath "$0")")/.."
+BOOK_DIR="$ROOT_DIR/docs"
 PORT=4001
 SERVE_URL="http://localhost:${PORT}"
+PYTHON_VENV_DIR="/Users/Mathijs.Mortimer/Development/utilities/.venv/bin/activate"
 
 cd "$BOOK_DIR" || { echo "❌ Failed to cd into ${BOOK_DIR}"; exit 1; }
+
+
 
 ###############################################
 # Helper: Run command quietly unless it fails #
@@ -66,6 +69,15 @@ update_crate_if_needed() {
     fi
 }
 
+# Update Wireviz dependencies
+source "$PYTHON_VENV_DIR" || { echo "❌ Failed to activate Python virtual environment at ${PYTHON_VENV_DIR}"; exit 1; }
+uv pip install wireviz --upgrade || { echo "❌ Failed to upgrade WireViz via pip"; exit 1; }
+brew install graphviz || { echo "❌ Failed to install Graphviz via Homebrew"; exit 1; }
+
+# Update tscircuit globally
+# npm update -g tscircuit || { echo "❌ Failed to update tscircuit globally"; exit 1; }
+
+
 ###############################################
 # Update mdBook + mdbook-mermaid
 ###############################################
@@ -79,6 +91,14 @@ update_crate_if_needed "mdbook-mermaid" "mdbook-mermaid"
 ###############################################
 echo "🔄 Updating Mermaid bundle via mdbook-mermaid…"
 run_quiet "mdbook-mermaid install ."
+
+# Generate WireViz diagrams
+echo "🔄 Generating WireViz diagrams…"
+run_quiet "wireviz $ROOT_DIR/schematics/wiring/mortimmy.yml -o $BOOK_DIR/src/hardware/schematics/wiring/ -f s"
+
+# Generate tsconfig circuit diagrams
+# echo "🔄 Generating tsconfig circuit diagrams…"
+# run_quiet "tscircuit -i $ROOT_DIR/schematics/pcb/ -o $BOOK_DIR/src/hardware/schematics/pcb/ -f svg"
 
 ###############################################
 # Build the book

@@ -1,0 +1,20 @@
+[package]
+name = "mortimmy-tools"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "mortimmy-tools"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+heapless.workspace = true
+mortimmy-deploy = { path = "../../crates/deploy" }
+mortimmy-protocol = { path = "../../crates/protocol" }
+mortimmy-rp2350 = { path = "../../firmware/rp2350" }
+probe-rs.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

@@ -1,0 +1,11 @@
+# Bare-board smoke-test configuration for the connected Pico LiPo 2.
+#
+# Update `serial_device` for your host before using this with the ignored live
+# integration tests. On macOS the path will typically look like
+# /dev/tty.usbmodemXXXX once a USB CDC transport exists.
+
+serial_device = "/dev/ttyACM0"
+baud_rate = 115200
+timeout_ms = 2000
+expect_audio_bridge = false
+expect_trellis = false

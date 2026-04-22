@@ -1,0 +1,12 @@
+[package]
+name = "mortimmy-drivers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+embedded-hal.workspace = true
+mortimmy-core = { path = "../core" }
