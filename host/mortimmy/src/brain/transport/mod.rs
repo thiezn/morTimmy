@@ -5,13 +5,22 @@ mod serial;
 
 use anyhow::Result;
 use clap::ValueEnum;
-use mortimmy_protocol::messages::{Command, Telemetry};
+use mortimmy_protocol::messages::{
+    command::Command,
+    telemetry::{StatusTelemetry, Telemetry},
+};
 use tokio::time::Duration;
 
 use crate::serial::SerialConfig;
 
 pub use self::loopback::LoopbackPicoTransport;
 pub use self::serial::ManagedSerialPicoTransport;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ConnectedController {
+    pub device_path: String,
+    pub status: StatusTelemetry,
+}
 
 /// Selects which protocol transport backend the host brain uses.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -75,6 +84,17 @@ impl BrainTransport {
         match self {
             Self::Loopback(transport) => transport.exchange_command(command),
             Self::Serial(transport) => transport.exchange_command(command).await,
+        }
+    }
+
+    /// Return the currently discovered controllers that are active on the selected backend.
+    pub fn connected_controllers(&self) -> Vec<ConnectedController> {
+        match self {
+            Self::Loopback(transport) => vec![ConnectedController {
+                device_path: transport.device_path().to_string(),
+                status: transport.status(),
+            }],
+            Self::Serial(transport) => transport.connected_controllers(),
         }
     }
 }

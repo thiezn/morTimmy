@@ -29,3 +29,23 @@ pub const PIMORONI_PICO_LIPO_2: BoardProfile = BoardProfile {
     has_qwst: true,
     has_lipo_charger: true,
 };
+
+/// Audio-controller target: Raspberry Pi Pico 2 W with Pico Audio Pack.
+pub const RASPBERRY_PI_PICO_2_W: BoardProfile = BoardProfile {
+    name: "Pico 2 W + Pico Audio Pack",
+    mcu: "RP2350",
+    flash_bytes: 4 * 1024 * 1024,
+    psram_bytes: 0,
+    has_usb_c: false,
+    has_qwst: false,
+    has_lipo_charger: false,
+};
+
+/// Return the compile-time selected board profile.
+pub const fn active_board_profile() -> BoardProfile {
+    if cfg!(feature = "board-audio-controller") {
+        RASPBERRY_PI_PICO_2_W
+    } else {
+        PIMORONI_PICO_LIPO_2
+    }
+}

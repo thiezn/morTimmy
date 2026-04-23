@@ -3,8 +3,13 @@ use mortimmy_core::{Mode, PwmTicks, ServoTicks};
 use mortimmy_protocol::{
     decode_message, encode_message, wrap_payload, FrameDecoder,
     messages::{
-        AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding, Command,
-        DesiredStateCommand, DriveCommand, ServoCommand, WireMessage,
+        WireMessage,
+        command::Command,
+        commands::{
+            AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding,
+            DesiredStateCommand, DriveCommand, ServoCommand,
+        },
+        telemetry::Telemetry,
     },
 };
 use mortimmy_rp2350::FirmwareScaffold;
@@ -115,8 +120,6 @@ fn firmware_scaffold_uses_latest_desired_state() {
     assert_eq!(scaffold.control.servo.tilt, ServoTicks(36));
     assert_eq!(
         response,
-        Some(mortimmy_protocol::messages::Telemetry::DesiredState(
-            scaffold.desired_state_telemetry(),
-        ))
+        Some(Telemetry::DesiredState(scaffold.desired_state_telemetry()))
     );
 }

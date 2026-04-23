@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use mortimmy_drivers::{PadEvent, PadEventKind as DriverPadEventKind, PadIndex};
-use mortimmy_protocol::messages::{PadEventKind, TrellisPadTelemetry};
+use mortimmy_protocol::messages::telemetry::{PadEventKind, TrellisPadTelemetry};
 
 /// Configuration for the Trellis M4 4x4 keypad and LED module.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

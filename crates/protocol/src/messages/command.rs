@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{
+use super::commands::{
     AudioChunkCommand, DesiredStateCommand, ParameterUpdate, TrellisLedCommand,
 };
 
@@ -12,6 +12,7 @@ pub enum Command {
     SetParam(ParameterUpdate),
     PlayAudio(AudioChunkCommand),
     SetTrellisLeds(TrellisLedCommand),
+    GetStatus,
     Ping,
 }
 
@@ -23,6 +24,7 @@ impl Command {
             Self::SetParam(_) => "set-param",
             Self::PlayAudio(_) => "play-audio",
             Self::SetTrellisLeds(_) => "set-trellis-leds",
+            Self::GetStatus => "get-status",
             Self::Ping => "ping",
         }
     }

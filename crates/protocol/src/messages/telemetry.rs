@@ -1,9 +1,26 @@
+//! Firmware-to-host protocol telemetry surface.
+
+pub mod audio;
+pub mod battery;
+pub mod capabilities;
+pub mod desired_state;
+pub mod drive;
+pub mod range;
+pub mod servo;
+pub mod status;
+pub mod trellis_pad;
+
 use serde::{Deserialize, Serialize};
 
-use super::{
-    AudioStatusTelemetry, BatteryTelemetry, DesiredStateTelemetry, RangeTelemetry,
-    StatusTelemetry, TrellisPadTelemetry,
-};
+pub use self::audio::AudioStatusTelemetry;
+pub use self::battery::BatteryTelemetry;
+pub use self::capabilities::{ControllerCapabilities, ControllerRole};
+pub use self::desired_state::DesiredStateTelemetry;
+pub use self::drive::MotorStateTelemetry;
+pub use self::range::RangeTelemetry;
+pub use self::servo::ServoStateTelemetry;
+pub use self::status::StatusTelemetry;
+pub use self::trellis_pad::{PadEventKind, TRELLIS_PAD_COUNT, TrellisPadTelemetry};
 
 /// Telemetry messages sent from the firmware back to the host.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

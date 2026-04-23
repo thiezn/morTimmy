@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use mortimmy_protocol::messages::Telemetry;
+use mortimmy_protocol::messages::telemetry::Telemetry;
 
 /// Placeholder transmit task state for the USB and serial link.
 #[derive(Clone, Copy, Debug, Default)]

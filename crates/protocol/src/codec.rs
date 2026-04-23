@@ -37,10 +37,17 @@ mod tests {
 
     use super::{MAX_PAYLOAD_LEN, decode_message, encode_message};
     use crate::messages::{
-        AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding, AudioStatusTelemetry,
-        Command, DesiredStateCommand, DesiredStateTelemetry, DriveCommand, MotorStateTelemetry,
-        PadEventKind, ParameterKey, ParameterUpdate, ServoCommand, ServoStateTelemetry,
-        Telemetry, TrellisLedCommand, TrellisPadTelemetry, WireMessage,
+        WireMessage,
+        command::Command,
+        commands::{
+            AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding,
+            DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
+            TrellisLedCommand,
+        },
+        telemetry::{
+            AudioStatusTelemetry, DesiredStateTelemetry, MotorStateTelemetry, PadEventKind,
+            ServoStateTelemetry, Telemetry, TrellisPadTelemetry,
+        },
     };
 
     #[test]
@@ -116,19 +123,20 @@ mod tests {
                 tilt: ServoTicks(1_220),
             },
         )));
-        let telemetry = WireMessage::Telemetry(Telemetry::DesiredState(DesiredStateTelemetry {
-            mode: Mode::Teleop,
-            drive: MotorStateTelemetry {
-                left_pwm: PwmTicks(320),
-                right_pwm: PwmTicks(-125),
-                current_limit_hit: false,
-            },
-            servo: ServoStateTelemetry {
-                pan: ServoTicks(1_540),
-                tilt: ServoTicks(1_220),
-            },
-            error: None,
-        }));
+        let telemetry =
+            WireMessage::Telemetry(Telemetry::DesiredState(DesiredStateTelemetry::new(
+                Mode::Teleop,
+                MotorStateTelemetry {
+                    left_pwm: PwmTicks(320),
+                    right_pwm: PwmTicks(-125),
+                    current_limit_hit: false,
+                },
+                ServoStateTelemetry {
+                    pan: ServoTicks(1_540),
+                    tilt: ServoTicks(1_220),
+                },
+                None,
+            )));
 
         let mut buffer = [0u8; 256];
         let encoded_command = encode_message(&command, &mut buffer).unwrap();

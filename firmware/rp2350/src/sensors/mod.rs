@@ -4,7 +4,7 @@ pub mod battery;
 pub mod ultrasonic;
 
 use mortimmy_core::Millimeters;
-use mortimmy_protocol::messages::{BatteryTelemetry, RangeTelemetry};
+use mortimmy_protocol::messages::telemetry::{BatteryTelemetry, RangeTelemetry};
 
 use self::battery::BatteryMonitorTask;
 use self::ultrasonic::UltrasonicTask;

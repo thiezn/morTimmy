@@ -126,7 +126,7 @@ Optional coverage report:
 
 The current RP2350 firmware can be smoke-tested without any attached peripherals. On the embedded target it now starts an Embassy USB CDC task that decodes the shared framed protocol, applies commands through the firmware scaffold, and writes telemetry responses back over the same USB link.
 
-The shared protocol is now exercised inside the firmware crate as well: mode, drive, servo, parameter, audio, Trellis LED, stop, and ping commands are applied to the firmware scaffold under unit tests, and the default audio chunk size is aligned across host planning, wire payload sizing, and firmware buffering.
+The shared protocol is now exercised inside the firmware crate as well: desired-state, parameter, audio, Trellis LED, status, and ping commands are applied to the firmware scaffold under unit tests, and the default audio chunk size is aligned across host planning, wire payload sizing, and firmware buffering.
 
 Validate the firmware locally before touching hardware:
 
@@ -162,18 +162,20 @@ cargo run -p mortimmy-tools -- deploy firmware run --probe-index 0
 The probe-based workflow uses the `probe-rs` chip name `RP235x`. A successful RTT session starts with a line like:
 
 ```text
-boot board=Pimoroni Pico LiPo 2 mcu=RP2350B flash=16777216 psram=8388608 transport=usb-cdc mode=idle audio=host-waveform-bridge chunk_samples=240 trellis=false ultrasonic=false battery=false
+boot board=Pimoroni Pico LiPo 2 mcu=RP2350B flash=16777216 psram=8388608 transport=usb-cdc mode=teleop audio=host-waveform-bridge chunk_samples=240 trellis=false ultrasonic=false battery=false
 ```
 
 If `firmware-flash` reports `No debug probes were found`, attach an SWD-compatible debug probe or fall back to the BOOTSEL/UF2 path above.
 
 On the validation machine used for the BOOTSEL bring-up, `mortimmy-tools deploy firmware probe-list` currently reports `No debug probes were found.`, so BOOTSEL remains the only available hardware flashing path.
 
-After a successful BOOTSEL upload, the Pico should now enumerate as a runtime USB CDC device such as `/dev/cu.usbmodem*` on macOS. The latest live validation attempt in this workspace was blocked before that point because the board was not visible in BOOTSEL mode, so the new CDC path compiled cleanly and is ready, but it was not exercised against flashed hardware in this session.
+After a successful BOOTSEL upload, the Pico should enumerate as a runtime USB CDC device such as `/dev/cu.usbmodem*` on macOS. That runtime enumeration path is implemented in firmware; regular live smoke coverage for the full host-to-device roundtrip remains tracked in `TODO.md`.
 
 ## Run Locally On macOS
 
 The host brain now supports both the `loopback` transport for local proofing and the `serial` transport for a live Pico USB CDC device. Both paths use the same routing, postcard codec, and CRC16 plus COBS framing.
+
+`teleop` with zero drive is now the nominal stopped state. If the firmware link times out, the controller enters `fault`, resets to its safe failed state, and the host reasserts its last requested `teleop` or `autonomous` mode after reconnect.
 
 Create or update a config file:
 
@@ -200,7 +202,6 @@ s | reverse
 a | left
 d | right
 t | teleop mode
-i | idle mode
 u | autonomous mode (default servo-scan plan)
 f | fault mode
 q | quit

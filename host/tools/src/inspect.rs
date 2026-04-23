@@ -55,7 +55,11 @@ mod tests {
     use heapless::Vec;
     use mortimmy_protocol::{
         encode_message,
-        messages::{AudioChunkCommand, AudioEncoding, Command, WireMessage},
+        messages::{
+            WireMessage,
+            command::Command,
+            commands::{AudioChunkCommand, AudioEncoding},
+        },
         wrap_payload,
     };
 

@@ -3,7 +3,8 @@
 use clap::ValueEnum;
 use heapless::Vec as HeaplessVec;
 use mortimmy_protocol::messages::{
-    AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding, Command,
+    command::Command,
+    commands::{AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding},
 };
 use serde::{Deserialize, Serialize};
 
@@ -160,7 +161,7 @@ impl AudioSubsystem {
 
 #[cfg(test)]
 mod tests {
-    use mortimmy_protocol::messages::AUDIO_CHUNK_CAPACITY_SAMPLES;
+    use mortimmy_protocol::messages::{command::Command, commands::AUDIO_CHUNK_CAPACITY_SAMPLES};
 
     use super::{AudioBackendKind, AudioConfig, AudioPlanError, AudioSubsystem};
 
@@ -202,12 +203,9 @@ mod tests {
         let commands = subsystem.build_audio_commands(11, &waveform).unwrap();
 
         assert_eq!(commands.len(), 3);
-        assert!(matches!(
-            commands[0],
-            mortimmy_protocol::messages::Command::PlayAudio(_)
-        ));
+        assert!(matches!(commands[0], Command::PlayAudio(_)));
         match &commands[2] {
-            mortimmy_protocol::messages::Command::PlayAudio(command) => {
+            Command::PlayAudio(command) => {
                 assert_eq!(command.chunk_index, 2);
                 assert!(command.is_final_chunk);
                 assert_eq!(command.samples.len(), 12);

@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use mortimmy_core::ServoTicks;
-use mortimmy_protocol::messages::ServoCommand;
+use mortimmy_protocol::messages::commands::ServoCommand;
 use tokio::time::Instant;
 
 use crate::input::DriveIntent;
@@ -41,11 +41,6 @@ pub struct AutonomyPlan {
     pub steps: &'static [AutonomyStep],
 }
 
-const HOLD_POSITION_STEPS: [AutonomyStep; 1] = [AutonomyStep {
-    target: AutonomousTarget::hold_position(),
-    until: AutonomyCondition::After(Duration::from_secs(60)),
-}];
-
 const SERVO_SCAN_STEPS: [AutonomyStep; 4] = [
     AutonomyStep {
         target: AutonomousTarget {
@@ -83,11 +78,6 @@ const SERVO_SCAN_STEPS: [AutonomyStep; 4] = [
     },
 ];
 
-pub const HOLD_POSITION_PLAN: AutonomyPlan = AutonomyPlan {
-    name: "hold-position",
-    steps: &HOLD_POSITION_STEPS,
-};
-
 pub const SERVO_SCAN_PLAN: AutonomyPlan = AutonomyPlan {
     name: "servo-scan",
     steps: &SERVO_SCAN_STEPS,
@@ -101,10 +91,6 @@ pub struct AutonomyRunner {
 }
 
 impl AutonomyRunner {
-    pub const fn hold_position() -> Self {
-        Self::new(&HOLD_POSITION_PLAN)
-    }
-
     pub const fn servo_scan() -> Self {
         Self::new(&SERVO_SCAN_PLAN)
     }
@@ -155,7 +141,7 @@ mod tests {
 
     use tokio::time::Instant;
 
-    use super::AutonomyRunner;
+    use super::{AutonomyCondition, AutonomyPlan, AutonomyRunner, AutonomyStep, AutonomousTarget};
 
     #[test]
     fn servo_scan_plan_advances_after_elapsed_durations() {
@@ -173,7 +159,16 @@ mod tests {
 
     #[test]
     fn hold_position_plan_stays_stationary() {
-        let mut runner = AutonomyRunner::hold_position();
+        const HOLD_POSITION_STEPS: [AutonomyStep; 1] = [AutonomyStep {
+            target: AutonomousTarget::hold_position(),
+            until: AutonomyCondition::After(Duration::from_secs(60)),
+        }];
+        const HOLD_POSITION_PLAN: AutonomyPlan = AutonomyPlan {
+            name: "hold-position",
+            steps: &HOLD_POSITION_STEPS,
+        };
+
+        let mut runner = AutonomyRunner::new(&HOLD_POSITION_PLAN);
         let start = Instant::now();
         let current = runner.target_at(start + Duration::from_secs(5));
 

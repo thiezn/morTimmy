@@ -186,7 +186,7 @@ fn describe_control_state(control_state: ControlState) -> String {
             "forward={} turn={} speed={}",
             drive.forward, drive.turn, drive.speed
         ),
-        None => "idle".to_string(),
+        None => "stopped".to_string(),
     }
 }
 

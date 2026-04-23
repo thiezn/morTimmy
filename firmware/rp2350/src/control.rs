@@ -3,13 +3,13 @@
 use mortimmy_core::{
     CoreError, DEFAULT_LIMITS, Milliseconds, Mode, PwmTicks, RobotLimits, ServoTicks,
 };
-use mortimmy_protocol::messages::{
+use mortimmy_protocol::messages::commands::{
     DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
 };
 
 use crate::{
     actuators::{drive::DriveTrainState, servo::PanTiltServoState},
-    board::{BoardProfile, PIMORONI_PICO_LIPO_2},
+    board::{BoardProfile, active_board_profile},
 };
 
 /// Top-level control loop state for the embedded target.
@@ -33,9 +33,9 @@ impl ControlLoop {
     /// Construct the control loop with safe defaults.
     pub const fn new() -> Self {
         Self {
-            mode: Mode::Idle,
+            mode: Mode::Teleop,
             limits: DEFAULT_LIMITS,
-            board: PIMORONI_PICO_LIPO_2,
+            board: active_board_profile(),
             drive: DriveTrainState::stopped(),
             servo: PanTiltServoState::centered(),
             last_error: None,
@@ -58,15 +58,16 @@ impl ControlLoop {
     /// Apply the latest desired control snapshot.
     pub fn apply_desired_state(&mut self, desired_state: DesiredStateCommand) {
         self.mode = desired_state.mode;
-        self.apply_servo(desired_state.servo);
 
-        if matches!(desired_state.mode, Mode::Idle | Mode::Fault) {
+        if desired_state.mode == Mode::Fault {
             self.drive.stop();
+            self.servo = PanTiltServoState::centered();
             self.last_error = None;
             return;
         }
 
-        self.apply_drive(desired_state.drive);
+        self.apply_servo(desired_state.servo());
+        self.apply_drive(desired_state.drive());
     }
 
     /// Record a protocol-level control error.
@@ -134,7 +135,7 @@ fn clamp_positive_u32(value: i32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use mortimmy_core::{Mode, PwmTicks, ServoTicks};
-    use mortimmy_protocol::messages::{
+    use mortimmy_protocol::messages::commands::{
         DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
     };
 
@@ -165,7 +166,7 @@ mod tests {
     }
 
     #[test]
-    fn desired_state_in_idle_forces_drive_stop() {
+    fn desired_state_in_fault_restores_safe_stopped_state() {
         let mut control = ControlLoop::default();
         control.apply_drive(DriveCommand {
             left: PwmTicks(400),
@@ -173,7 +174,7 @@ mod tests {
         });
 
         control.apply_desired_state(DesiredStateCommand::new(
-            Mode::Idle,
+            Mode::Fault,
             DriveCommand {
                 left: PwmTicks(250),
                 right: PwmTicks(250),
@@ -184,15 +185,15 @@ mod tests {
             },
         ));
 
-        assert_eq!(control.mode, Mode::Idle);
+        assert_eq!(control.mode, Mode::Fault);
         assert_eq!(control.drive.left_pwm.0, 0);
         assert_eq!(control.drive.right_pwm.0, 0);
-        assert_eq!(control.servo.pan, ServoTicks(12));
-        assert_eq!(control.servo.tilt, ServoTicks(18));
+        assert_eq!(control.servo.pan, ServoTicks(0));
+        assert_eq!(control.servo.tilt, ServoTicks(0));
     }
 
     #[test]
-    fn desired_state_keeps_stationary_teleop_distinct_from_idle() {
+    fn desired_state_keeps_stationary_teleop_distinct_from_fault() {
         let mut control = ControlLoop::default();
 
         control.apply_desired_state(DesiredStateCommand::new(

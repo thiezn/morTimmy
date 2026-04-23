@@ -1,5 +1,8 @@
 //! Audio output traits for embedded playback devices such as the Pico Audio Pack.
 
+#[path = "audio/pico_audio_pack.rs"]
+pub mod pico_audio_pack;
+
 /// Supported sample formats for firmware-side audio output.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AudioSampleFormat {

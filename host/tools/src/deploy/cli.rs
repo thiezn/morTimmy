@@ -143,7 +143,7 @@ pub enum FirmwareSubcommand {
 #[derive(Debug, Args, Clone)]
 pub struct FirmwareTargetOptions {
     /// Firmware target definition owned by the firmware crate.
-    #[arg(long, value_enum, default_value_t = FirmwareTargetId::Rp2350, help_heading = "FIRMWARE TARGET")]
+    #[arg(long, value_enum, default_value_t = FirmwareTargetId::MotionController, help_heading = "FIRMWARE TARGET")]
     pub target: FirmwareTargetId,
     /// Override the firmware Cargo profile.
     #[arg(long, help_heading = "FIRMWARE TARGET")]

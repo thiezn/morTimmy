@@ -7,6 +7,11 @@ license.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = ["capability-drive", "capability-servo"]
+capability-drive = []
+capability-servo = []
+
 [dependencies]
 cobs.workspace = true
 crc.workspace = true

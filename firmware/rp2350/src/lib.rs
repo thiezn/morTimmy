@@ -14,8 +14,13 @@ pub mod usb;
 use mortimmy_core::{CoreError, Millimeters, Mode};
 use mortimmy_drivers::PadEvent;
 use mortimmy_protocol::messages::{
-    AudioStatusTelemetry, Command, DesiredStateTelemetry, ParameterKey, ParameterUpdate,
-    StatusTelemetry, Telemetry, WireMessage,
+    WireMessage,
+    command::Command,
+    commands::{ParameterKey, ParameterUpdate},
+    telemetry::{
+        AudioStatusTelemetry, ControllerCapabilities, ControllerRole, DesiredStateTelemetry,
+        StatusTelemetry, Telemetry,
+    },
 };
 
 const RP2350_BOOTSEL_VOLUME_LABELS: &[&str] = &["RP2350", "RPI-RP2"];
@@ -27,33 +32,102 @@ const RP2350_BOOTSEL_MANUAL_STEPS: &[&str] = &[
     "Release BOOTSEL after a mass-storage volume such as RP2350 or RPI-RP2 appears.",
     "Confirm the BOOTSEL device with picotool info or by listing /Volumes.",
 ];
+const MOTION_CONTROLLER_CARGO_FEATURES: &[&str] = &["board-motion-controller"];
+const AUDIO_CONTROLLER_CARGO_FEATURES: &[&str] = &["board-audio-controller"];
 const DEFAULT_LINK_QUALITY: u8 = 100;
 
+const fn active_controller_role() -> ControllerRole {
+    if cfg!(feature = "board-audio-controller") {
+        ControllerRole::AudioController
+    } else {
+        ControllerRole::MotionController
+    }
+}
+
+const fn active_controller_capabilities() -> ControllerCapabilities {
+    let mut bits = 0u32;
+
+    if cfg!(feature = "capability-drive") {
+        bits |= ControllerCapabilities::DRIVE.bits();
+    }
+    if cfg!(feature = "capability-servo") {
+        bits |= ControllerCapabilities::SERVO.bits();
+    }
+    if cfg!(feature = "sensor-ultrasonic") {
+        bits |= ControllerCapabilities::RANGE_SENSOR.bits();
+    }
+    if cfg!(feature = "sensor-battery") {
+        bits |= ControllerCapabilities::BATTERY_MONITOR.bits();
+    }
+    if cfg!(feature = "capability-audio-output") {
+        bits |= ControllerCapabilities::AUDIO_OUTPUT.bits();
+    }
+    if cfg!(feature = "ui-display") {
+        bits |= ControllerCapabilities::TEXT_DISPLAY.bits();
+    }
+
+    ControllerCapabilities::from_bits(bits)
+}
+
 /// Deploy metadata consumed by the host-side tooling.
-pub const DEPLOY_TARGET: mortimmy_deploy::FirmwareTarget = mortimmy_deploy::FirmwareTarget {
-    id: "rp2350",
-    board_name: "Pimoroni Pico LiPo 2",
-    board_mcu: "RP2350B",
-    artifact: mortimmy_deploy::Artifact {
-        manifest_path: "firmware/rp2350/Cargo.toml",
-        package_name: "mortimmy-rp2350",
-        bin_name: "mortimmy-rp2350",
-        target_triple: "thumbv8m.main-none-eabihf",
-        default_profile: mortimmy_deploy::BuildProfile::Debug,
-    },
-    probe: mortimmy_deploy::Probe { chip: "RP235x" },
-    uf2: mortimmy_deploy::Uf2 {
-        family_name: "RP2350_ARM_S",
-        family_id: 0xE48B_FF59,
-        absolute_block_location: Some(0x10FF_FF00),
-    },
-    bootsel: mortimmy_deploy::Bootsel {
-        button_name: "BOOTSEL",
-        volume_labels: RP2350_BOOTSEL_VOLUME_LABELS,
-        info_tokens: RP2350_BOOTSEL_INFO_TOKENS,
-        manual_steps: RP2350_BOOTSEL_MANUAL_STEPS,
-    },
-};
+pub const DEPLOY_TARGET_MOTION_CONTROLLER: mortimmy_deploy::FirmwareTarget =
+    mortimmy_deploy::FirmwareTarget {
+        id: "motion-controller",
+        board_name: "Pimoroni Pico LiPo 2",
+        board_mcu: "RP2350B",
+        artifact: mortimmy_deploy::Artifact {
+            manifest_path: "firmware/rp2350/Cargo.toml",
+            package_name: "mortimmy-rp2350",
+            bin_name: "mortimmy-rp2350",
+            cargo_features: MOTION_CONTROLLER_CARGO_FEATURES,
+            cargo_no_default_features: true,
+            cargo_target_dir: "target/mortimmy-rp2350-motion-controller",
+            target_triple: "thumbv8m.main-none-eabihf",
+            default_profile: mortimmy_deploy::BuildProfile::Debug,
+        },
+        probe: mortimmy_deploy::Probe { chip: "RP235x" },
+        uf2: mortimmy_deploy::Uf2 {
+            family_name: "RP2350_ARM_S",
+            family_id: 0xE48B_FF59,
+            absolute_block_location: Some(0x10FF_FF00),
+        },
+        bootsel: mortimmy_deploy::Bootsel {
+            button_name: "BOOTSEL",
+            volume_labels: RP2350_BOOTSEL_VOLUME_LABELS,
+            info_tokens: RP2350_BOOTSEL_INFO_TOKENS,
+            manual_steps: RP2350_BOOTSEL_MANUAL_STEPS,
+        },
+    };
+
+/// Deploy metadata for the Pico 2 W audio controller image.
+pub const DEPLOY_TARGET_AUDIO_CONTROLLER: mortimmy_deploy::FirmwareTarget =
+    mortimmy_deploy::FirmwareTarget {
+        id: "audio-controller",
+        board_name: "Pico 2 W + Pico Audio Pack",
+        board_mcu: "RP2350",
+        artifact: mortimmy_deploy::Artifact {
+            manifest_path: "firmware/rp2350/Cargo.toml",
+            package_name: "mortimmy-rp2350",
+            bin_name: "mortimmy-rp2350",
+            cargo_features: AUDIO_CONTROLLER_CARGO_FEATURES,
+            cargo_no_default_features: true,
+            cargo_target_dir: "target/mortimmy-rp2350-audio-controller",
+            target_triple: "thumbv8m.main-none-eabihf",
+            default_profile: mortimmy_deploy::BuildProfile::Debug,
+        },
+        probe: mortimmy_deploy::Probe { chip: "RP235x" },
+        uf2: mortimmy_deploy::Uf2 {
+            family_name: "RP2350_ARM_S",
+            family_id: 0xE48B_FF59,
+            absolute_block_location: Some(0x10FF_FF00),
+        },
+        bootsel: mortimmy_deploy::Bootsel {
+            button_name: "BOOTSEL",
+            volume_labels: RP2350_BOOTSEL_VOLUME_LABELS,
+            info_tokens: RP2350_BOOTSEL_INFO_TOKENS,
+            manual_steps: RP2350_BOOTSEL_MANUAL_STEPS,
+        },
+    };
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 use defmt_rtt as _;
@@ -118,7 +192,7 @@ pub struct FirmwareScaffold {
 impl Default for FirmwareScaffold {
     fn default() -> Self {
         Self {
-            board: board::PIMORONI_PICO_LIPO_2,
+            board: board::active_board_profile(),
             control: control::ControlLoop::new(),
             link_rx: link_rx::LinkRxTask::default(),
             link_tx: link_tx::LinkTxTask::default(),
@@ -175,6 +249,7 @@ impl FirmwareScaffold {
                 self.trellis.apply_led_mask(command.led_mask);
                 None
             }
+            Command::GetStatus => Some(Telemetry::Status(self.status_telemetry())),
             Command::Ping => Some(Telemetry::Pong),
         };
 
@@ -199,6 +274,8 @@ impl FirmwareScaffold {
     pub const fn status_telemetry(&self) -> StatusTelemetry {
         StatusTelemetry {
             mode: self.control.mode,
+            controller_role: active_controller_role(),
+            capabilities: active_controller_capabilities(),
             uptime_ms: 0,
             link_quality: DEFAULT_LINK_QUALITY,
             error: self.control.last_error,
@@ -207,17 +284,18 @@ impl FirmwareScaffold {
 
     /// Snapshot the applied desired control state.
     pub const fn desired_state_telemetry(&self) -> DesiredStateTelemetry {
-        DesiredStateTelemetry {
-            mode: self.control.mode,
-            drive: self.control.drive.telemetry(),
-            servo: self.control.servo.telemetry(),
-            error: self.control.last_error,
-        }
+        DesiredStateTelemetry::new(
+            self.control.mode,
+            self.control.drive.telemetry(),
+            self.control.servo.telemetry(),
+            self.control.last_error,
+        )
     }
 
-    /// Restore the scaffold to its safe defaults after a link failure.
-    pub fn restore_default_state(&mut self, error: Option<CoreError>) {
+    /// Enter a fault state after link loss or another safety-critical failure.
+    pub fn enter_fault_state(&mut self, error: Option<CoreError>) {
         *self = Self::default();
+        self.control.mode = Mode::Fault;
         self.control.last_error = error;
     }
 
@@ -306,7 +384,6 @@ fn clamp_non_zero_usize(value: i32) -> Option<usize> {
 
 const fn mode_label(mode: Mode) -> &'static str {
     match mode {
-        Mode::Idle => "idle",
         Mode::Teleop => "teleop",
         Mode::Autonomous => "autonomous",
         Mode::Fault => "fault",
@@ -381,11 +458,19 @@ mod tests {
     use heapless::Vec;
     use mortimmy_drivers::{PadEvent, PadEventKind as DriverPadEventKind, PadIndex};
     use mortimmy_protocol::messages::{
-        AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding, Command, ParameterKey,
-        ParameterUpdate, Telemetry, WireMessage,
+        WireMessage,
+        command::Command,
+        commands::{
+            AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding, DesiredStateCommand,
+            DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
+        },
+        telemetry::{ControllerCapabilities, PadEventKind, Telemetry, TrellisPadTelemetry},
     };
 
-    use super::{DEPLOY_TARGET, FirmwareScaffold, audio_route_label, mode_label, transport_label};
+    use super::{
+        DEPLOY_TARGET_AUDIO_CONTROLLER, DEPLOY_TARGET_MOTION_CONTROLLER, FirmwareScaffold,
+        active_controller_capabilities, audio_route_label, mode_label, transport_label,
+    };
 
     #[test]
     fn default_scaffold_reports_safe_bring_up_defaults() {
@@ -396,7 +481,7 @@ mod tests {
         assert_eq!(report.flash_bytes, 16 * 1024 * 1024);
         assert_eq!(report.psram_bytes, 8 * 1024 * 1024);
         assert_eq!(report.transport, "usb-cdc");
-        assert_eq!(report.control_mode, "idle");
+        assert_eq!(report.control_mode, "teleop");
         assert_eq!(report.audio_route, "host-waveform-bridge");
         assert_eq!(report.audio_chunk_samples, 240);
         assert!(!report.trellis_enabled);
@@ -421,43 +506,104 @@ mod tests {
     fn deploy_metadata_matches_bring_up_defaults() {
         let report = FirmwareScaffold::default().bring_up_report();
 
-        assert_eq!(DEPLOY_TARGET.board_name, report.board_name);
-        assert_eq!(DEPLOY_TARGET.board_mcu, report.board_mcu);
         assert_eq!(
-            DEPLOY_TARGET.artifact.manifest_path,
+            DEPLOY_TARGET_MOTION_CONTROLLER.board_name,
+            report.board_name
+        );
+        assert_eq!(DEPLOY_TARGET_MOTION_CONTROLLER.board_mcu, report.board_mcu);
+        assert_eq!(
+            DEPLOY_TARGET_MOTION_CONTROLLER.artifact.manifest_path,
             "firmware/rp2350/Cargo.toml"
         );
         assert_eq!(
-            DEPLOY_TARGET.artifact.target_triple,
+            DEPLOY_TARGET_MOTION_CONTROLLER.artifact.cargo_features,
+            &["board-motion-controller"]
+        );
+        assert!(
+            DEPLOY_TARGET_MOTION_CONTROLLER
+                .artifact
+                .cargo_no_default_features
+        );
+        assert_eq!(
+            DEPLOY_TARGET_MOTION_CONTROLLER.artifact.cargo_target_dir,
+            "target/mortimmy-rp2350-motion-controller"
+        );
+        assert_eq!(
+            DEPLOY_TARGET_MOTION_CONTROLLER.artifact.target_triple,
             "thumbv8m.main-none-eabihf"
         );
-        assert_eq!(DEPLOY_TARGET.probe.chip, "RP235x");
-        assert_eq!(DEPLOY_TARGET.uf2.family_name, "RP2350_ARM_S");
-        assert_eq!(DEPLOY_TARGET.uf2.family_id, 0xE48B_FF59);
-        assert_eq!(DEPLOY_TARGET.uf2.absolute_block_location, Some(0x10FF_FF00));
-        assert_eq!(DEPLOY_TARGET.bootsel.button_name, "BOOTSEL");
-        assert!(DEPLOY_TARGET.bootsel.volume_labels.contains(&"RP2350"));
+        assert_eq!(DEPLOY_TARGET_MOTION_CONTROLLER.probe.chip, "RP235x");
+        assert_eq!(
+            DEPLOY_TARGET_MOTION_CONTROLLER.uf2.family_name,
+            "RP2350_ARM_S"
+        );
+        assert_eq!(DEPLOY_TARGET_MOTION_CONTROLLER.uf2.family_id, 0xE48B_FF59);
+        assert_eq!(
+            DEPLOY_TARGET_MOTION_CONTROLLER.uf2.absolute_block_location,
+            Some(0x10FF_FF00)
+        );
+        assert_eq!(
+            DEPLOY_TARGET_MOTION_CONTROLLER.bootsel.button_name,
+            "BOOTSEL"
+        );
+        assert!(
+            DEPLOY_TARGET_MOTION_CONTROLLER
+                .bootsel
+                .volume_labels
+                .contains(&"RP2350")
+        );
+    }
+
+    #[test]
+    fn deploy_targets_keep_controller_feature_bundles_isolated() {
+        assert_eq!(DEPLOY_TARGET_MOTION_CONTROLLER.id, "motion-controller");
+        assert_eq!(DEPLOY_TARGET_AUDIO_CONTROLLER.id, "audio-controller");
+        assert_eq!(
+            DEPLOY_TARGET_MOTION_CONTROLLER.artifact.cargo_features,
+            &["board-motion-controller"]
+        );
+        assert_eq!(
+            DEPLOY_TARGET_AUDIO_CONTROLLER.artifact.cargo_features,
+            &["board-audio-controller"]
+        );
+        assert_ne!(
+            DEPLOY_TARGET_MOTION_CONTROLLER.artifact.cargo_target_dir,
+            DEPLOY_TARGET_AUDIO_CONTROLLER.artifact.cargo_target_dir
+        );
+    }
+
+    #[test]
+    fn motion_controller_feature_bundle_matches_motor_and_ultrasonic_scope() {
+        let capabilities = active_controller_capabilities();
+
+        assert!(capabilities.contains(ControllerCapabilities::DRIVE));
+        assert!(capabilities.contains(ControllerCapabilities::SERVO));
+        assert!(capabilities.contains(ControllerCapabilities::RANGE_SENSOR));
+        assert!(!capabilities.contains(ControllerCapabilities::BATTERY_MONITOR));
+        assert!(!capabilities.contains(ControllerCapabilities::AUDIO_OUTPUT));
+        assert!(!capabilities.contains(ControllerCapabilities::TEXT_DISPLAY));
     }
 
     #[test]
     fn desired_state_command_updates_control_state_and_emits_combined_telemetry() {
         let mut scaffold = FirmwareScaffold::default();
 
-        let response = scaffold.handle_command(Command::SetDesiredState(
-            mortimmy_protocol::messages::DesiredStateCommand::new(
-                mortimmy_core::Mode::Teleop,
-                mortimmy_protocol::messages::DriveCommand {
-                    left: mortimmy_core::PwmTicks(320),
-                    right: mortimmy_core::PwmTicks(-240),
-                },
-                mortimmy_protocol::messages::ServoCommand {
-                    pan: mortimmy_core::ServoTicks(24),
-                    tilt: mortimmy_core::ServoTicks(36),
-                },
-            ),
-        ));
+        let response = scaffold.handle_command(Command::SetDesiredState(DesiredStateCommand::new(
+            mortimmy_core::Mode::Teleop,
+            DriveCommand {
+                left: mortimmy_core::PwmTicks(320),
+                right: mortimmy_core::PwmTicks(-240),
+            },
+            ServoCommand {
+                pan: mortimmy_core::ServoTicks(24),
+                tilt: mortimmy_core::ServoTicks(36),
+            },
+        )));
 
-        assert_eq!(scaffold.link_rx.last_command_kind, Some("set-desired-state"));
+        assert_eq!(
+            scaffold.link_rx.last_command_kind,
+            Some("set-desired-state")
+        );
         assert_eq!(scaffold.link_tx.last_telemetry_kind, Some("desired-state"));
         assert_eq!(scaffold.control.mode, mortimmy_core::Mode::Teleop);
         assert_eq!(
@@ -467,32 +613,33 @@ mod tests {
     }
 
     #[test]
-    fn restore_default_state_clears_control_audio_and_trellis() {
+    fn enter_fault_state_clears_control_audio_and_trellis() {
         let mut scaffold = FirmwareScaffold::default();
-        scaffold.handle_command(Command::SetDesiredState(
-            mortimmy_protocol::messages::DesiredStateCommand::new(
-                mortimmy_core::Mode::Teleop,
-                mortimmy_protocol::messages::DriveCommand {
-                    left: mortimmy_core::PwmTicks(200),
-                    right: mortimmy_core::PwmTicks(200),
-                },
-                mortimmy_protocol::messages::ServoCommand {
-                    pan: mortimmy_core::ServoTicks(24),
-                    tilt: mortimmy_core::ServoTicks(36),
-                },
-            ),
-        ));
+        scaffold.handle_command(Command::SetDesiredState(DesiredStateCommand::new(
+            mortimmy_core::Mode::Teleop,
+            DriveCommand {
+                left: mortimmy_core::PwmTicks(200),
+                right: mortimmy_core::PwmTicks(200),
+            },
+            ServoCommand {
+                pan: mortimmy_core::ServoTicks(24),
+                tilt: mortimmy_core::ServoTicks(36),
+            },
+        )));
         scaffold.audio.queued_chunks = 2;
         scaffold.trellis.apply_led_mask(0x00ff);
 
-        scaffold.restore_default_state(Some(mortimmy_core::CoreError::LinkTimedOut));
+        scaffold.enter_fault_state(Some(mortimmy_core::CoreError::LinkTimedOut));
 
-        assert_eq!(scaffold.control.mode, mortimmy_core::Mode::Idle);
+        assert_eq!(scaffold.control.mode, mortimmy_core::Mode::Fault);
         assert_eq!(scaffold.control.drive.left_pwm.0, 0);
         assert_eq!(scaffold.control.drive.right_pwm.0, 0);
         assert_eq!(scaffold.audio.queued_chunks, 0);
         assert_eq!(scaffold.trellis.led_mask, 0);
-        assert_eq!(scaffold.control.last_error, Some(mortimmy_core::CoreError::LinkTimedOut));
+        assert_eq!(
+            scaffold.control.last_error,
+            Some(mortimmy_core::CoreError::LinkTimedOut)
+        );
     }
 
     #[test]
@@ -577,9 +724,9 @@ mod tests {
 
         assert_eq!(
             telemetry,
-            Telemetry::TrellisPad(mortimmy_protocol::messages::TrellisPadTelemetry {
+            Telemetry::TrellisPad(TrellisPadTelemetry {
                 pad_index: 4,
-                event: mortimmy_protocol::messages::PadEventKind::Pressed,
+                event: PadEventKind::Pressed,
             })
         );
         assert_eq!(scaffold.link_tx.last_telemetry_kind, Some("trellis-pad"));

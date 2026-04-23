@@ -22,6 +22,11 @@ The protocol now runs in two concrete bring-up modes:
 - loopback, where the host exchanges framed bytes with `FirmwareScaffold` in-process
 - live USB CDC, where the RP2350 Embassy task reads framed bytes from the CDC ACM class and writes telemetry responses back to the host serial backend
 
+The Rust API is grouped the same way:
+
+- `mortimmy_protocol::messages::commands` contains host-to-firmware command types
+- `mortimmy_protocol::messages::telemetry` contains firmware-to-host telemetry types plus related capability/status enums
+
 ## Current Message Families
 
 Host-to-firmware traffic is now split into two semantic families:
@@ -37,22 +42,19 @@ The desired-state message is a full snapshot:
 
 The host owns that snapshot and resends it while continuous control is active. The firmware treats it as latest-wins state rather than as a queue of imperative motion commands.
 
-The current host keeps older imperative commands for migration and compatibility, but live keyboard and autonomous control now flow through the desired-state path.
-
 Host-to-firmware command coverage therefore includes:
 
 - full desired-state updates for teleop and autonomous control
 - typed parameter updates for safety limits and subsystem tuning
 - audio chunk forwarding for the Pico Audio Pack
 - Trellis LED updates
-- explicit compatibility commands for mode, drive, servo, and stop while the migration finishes
+- explicit status requests through `GetStatus`
 - link-health `ping`
 
 Firmware-to-host telemetry covers:
 
 - desired-state acknowledgements containing the applied mode, drive state, servo state, and last control-plane error
 - status snapshots with mode, link quality, and the last control-plane error
-- motor and servo state snapshots used by compatibility paths
 - range and battery measurements
 - audio queue state
 - Trellis pad events
@@ -62,9 +64,9 @@ Firmware-to-host telemetry covers:
 
 The control snapshot is intentionally a full message rather than a field patch.
 
-- The payload is still small enough for postcard plus COBS framing over USB CDC.
+- The payload is small enough for postcard plus COBS framing over USB CDC.
 - A full snapshot keeps merge semantics trivial: the firmware only needs to remember the latest desired state.
-- `teleop + zero drive` stays distinct from `idle`, which was not true when the only alternative was an imperative `Stop` command.
+- `teleop + zero drive` stays distinct from `fault`, which owns timeout and safe-stop recovery.
 - Tests can assert one idempotent apply path instead of reasoning about ordering between `SetMode`, `Drive`, `Servo`, and `Stop`.
 
 If payload pressure ever becomes real, an explicit patch message can be added later. For the current control surface, the simpler model is the safer one.

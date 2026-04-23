@@ -1,5 +1,8 @@
 use anyhow::{Context, anyhow, bail};
-use mortimmy_protocol::messages::{Command as ProtocolCommand, Telemetry};
+use mortimmy_protocol::messages::{
+    command::Command as ProtocolCommand,
+    telemetry::Telemetry,
+};
 use tokio::time::Duration;
 
 use crate::{
@@ -54,7 +57,7 @@ pub async fn start(command: StartCommand) -> anyhow::Result<()> {
             )?;
             ui.set_connection_status(format!(
                 "connecting to {} via {:?}",
-                runtime_config.serial.device_path,
+                runtime_config.serial.display_paths(),
                 transport_backend,
             ))?;
             ui.log(
@@ -84,7 +87,7 @@ pub async fn ping(command: PingCommand) -> anyhow::Result<()> {
     let config_path = config::resolve_config_path(command.config.as_deref())?;
     let file_config = config::load_or_create(&config_path)?;
     let runtime_config = command.merge_config(file_config);
-    let device_path = runtime_config.serial.device_path.clone();
+    let device_paths = runtime_config.serial.display_paths();
 
     let mut transport = BrainTransport::from_kind(
         transport_backend,
@@ -95,7 +98,7 @@ pub async fn ping(command: PingCommand) -> anyhow::Result<()> {
     transport.try_connect().await.map_err(|error| {
         anyhow!(
             "pico ping failed while connecting to {} via {:?}: {error:#}",
-            device_path,
+            device_paths,
             transport_backend,
         )
     })?;
@@ -103,12 +106,26 @@ pub async fn ping(command: PingCommand) -> anyhow::Result<()> {
     match transport.exchange_command(ProtocolCommand::Ping).await.map_err(|error| {
         anyhow!(
             "pico ping failed after connecting to {} via {:?}: {error:#}",
-            device_path,
+            device_paths,
             transport_backend,
         )
     })? {
         Some(Telemetry::Pong) => {
-            println!("pong device={} transport={transport_backend:?}", device_path);
+            let controllers = transport.connected_controllers();
+
+            if controllers.is_empty() {
+                bail!("missing status telemetry after ping")
+            }
+
+            for controller in controllers {
+                println!(
+                    "pong device={} transport={transport_backend:?} role={:?} capabilities=0x{:08x}",
+                    controller.device_path,
+                    controller.status.controller_role,
+                    controller.status.capabilities.bits(),
+                );
+            }
+
             Ok(())
         }
         Some(telemetry) => bail!("unexpected telemetry after ping: {telemetry:?}"),

@@ -12,8 +12,8 @@ use crate::{
 pub struct ConfigCommand {
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
-    #[arg(long = "serial-device", visible_alias = "serial-port")]
-    pub serial_device: Option<String>,
+    #[arg(long = "serial-device")]
+    pub serial_device: Vec<String>,
     #[arg(long = "serial-baud-rate")]
     pub serial_baud_rate: Option<u32>,
     #[arg(long)]
@@ -77,8 +77,8 @@ pub struct ConfigCommand {
 
 impl ConfigCommand {
     pub fn apply_to(&self, config: &mut AppConfig) {
-        if let Some(serial_device) = &self.serial_device {
-            config.serial.device_path = serial_device.clone();
+        if !self.serial_device.is_empty() {
+            config.serial.device_paths = self.serial_device.clone();
         }
         if let Some(serial_baud_rate) = self.serial_baud_rate {
             config.serial.baud_rate = serial_baud_rate;

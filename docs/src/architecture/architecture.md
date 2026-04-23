@@ -41,7 +41,7 @@ The active control design is now centered on a desired-state control plane:
 
 This crate provides the shared language for the rest of the workspace:
 
-- `Mode` for robot operating states such as idle, teleop, autonomous, and fault
+- `Mode` for robot operating states such as teleop, autonomous, and fault
 - units such as millimeters, milliseconds, PWM ticks, and servo ticks
 - safety-oriented defaults such as command timeout and motion limits
 - common error types that can cross the firmware-host boundary
@@ -58,11 +58,9 @@ The protocol crate defines the shared wire contract.
 
 Current message families include:
 
-- desired-state snapshots for continuous control ownership
-- one-shot actions for ping, parameter updates, audio, and Trellis LEDs
-- compatibility commands for legacy mode, drive, servo, and stop paths during migration
-- telemetry for status, motor/servo state, range, battery, pong, audio status, and Trellis pad events
-- desired-state acknowledgements that confirm the applied mode, drive, servo, and current control error
+- `messages::commands` for desired-state snapshots, parameter updates, audio forwarding, Trellis LED writes, status requests, and ping
+- `messages::telemetry` for desired-state acknowledgements, status, range, battery, audio status, Trellis pad events, and pong replies
+- `WireMessage` as the top-level direction tag shared by both families
 
 The shared protocol page at [protocol.md](protocol.md) documents the framing contract and message surface in more detail.
 
@@ -83,7 +81,7 @@ These traits stay intentionally small so the real firmware can depend on trait c
 The active firmware target is `firmware/rp2350` and is built around the Embassy ecosystem.
 
 - `embassy-rp` provides the RP2350B integration layer with the `rp235xb` feature enabled.
-- `embassy-usb` is the planned transport layer for USB communication.
+- `embassy-usb` provides the runtime USB CDC transport used by the live serial path.
 - `panic-probe` is used from the start so embedded panics remain debugger-friendly.
 - `defmt` and `defmt-rtt` are included for compact embedded logging and RTT inspection.
 
@@ -103,7 +101,7 @@ The embedded control plane now has a single latest-wins apply path for continuou
 
 - `ControlLoop::apply_desired_state` applies mode, drive, and servo together
 - stale motion still times out in firmware, even if the host misbehaves
-- compatibility commands remain supported, but they no longer define the main control model
+- one-shot commands stay outside that continuous-control path
 
 ### Board Profile
 
@@ -124,11 +122,11 @@ The safety model remains firmware-first:
 - the MCU remains the final enforcement point for limits even if the host clamps first
 - board bring-up for audio and Trellis should not weaken the core motion-safety path
 
-One key semantic change is that `stationary teleop` is now different from `idle`.
+One key semantic change is that `stationary teleop` is now the normal stopped state, while `fault` is reserved for safety failures and explicit fault requests.
 
-- a desired state with zero drive leaves the robot in its current control mode
-- switching to `idle` or `fault` still forces motion to stop in firmware
-- this removes the ambiguity that used to exist when a host had to choose between `Drive(0, 0)` and `Stop`
+- a desired state with zero drive leaves the robot in `teleop` with zero motor output
+- link timeout or another safety failure resets the scaffold and enters `fault`
+- when the host reconnects, it reasserts its last requested `teleop` or `autonomous` mode
 
 ### Bring-Up And Debug Path
 
@@ -136,8 +134,8 @@ One key semantic change is that `stationary teleop` is now different from `idle`
 - `firmware/rp2350/memory.x` encodes the active Pico LiPo 2 memory map: 16 MiB XIP flash at `0x10000000` and 520 KiB SRAM at `0x20000000`.
 - `firmware/rp2350/build.rs` copies `memory.x` into the linker search path so repo-root workspace builds produce the same valid image as crate-local builds.
 - `mortimmy-tools deploy firmware` now covers the full bring-up loop: build ELF, print artifacts, convert to UF2, deploy through `picotool` when the RP2350 BOOTSEL interface is visible, fall back to a BOOTSEL-mounted Pico volume when it is not, flash through the native `probe-rs` library, and hand off defmt/RTT monitoring to `probe-rs run`.
-- The current boot path is intentionally safe for bench testing without peripherals: it logs the board profile and default task state, then idles waiting for future executor work.
-- A successful USB-only BOOTSEL upload currently just boots the image and leaves BOOTSEL mode; it does not yet create a runtime USB CDC device because the executor-backed USB task has not been implemented.
+- The current boot path is intentionally safe for bench testing without peripherals: it logs the board profile and default task state, then waits in a safe zero-drive `teleop` state for desired-state traffic.
+- A successful USB-only BOOTSEL upload boots into the runtime USB CDC path; the host can then reconnect over the normal serial backend once the device enumerates.
 
 ## Host Runtime
 
@@ -174,6 +172,8 @@ The host brain now owns a single desired snapshot:
 
 Keyboard input mutates that desired snapshot in teleop mode. Autonomous mode mutates it through a small step runner with explicit step conditions. The runner currently ships with a safe default servo-scan plan so autonomous mode exercises sequencing without commanding blind drive motion.
 
+On transport loss, the controller times out into `fault` and resets to a safe failed state. The host keeps the last requested mode and reasserts it on reconnect.
+
 That split is deliberate:
 
 - runtime robot behavior is modeled as a runtime state machine because the current mode can change based on user input, reconnects, telemetry, and future websocket commands
@@ -200,7 +200,7 @@ sequenceDiagram
     Brain->>FW: SetDesiredState(Autonomous, drive, servo)
     FW-->>Brain: DesiredStateTelemetry
   end
-  Operator->>Brain: SetMode(Teleop or Idle)
+  Operator->>Brain: SetMode(Teleop or Fault)
   Brain->>Runner: reset()
 ```
 

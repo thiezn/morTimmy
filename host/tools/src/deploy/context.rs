@@ -67,14 +67,17 @@ fn is_workspace_manifest(path: &Path) -> Result<bool> {
 /// Firmware targets exported from firmware crates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum FirmwareTargetId {
-    Rp2350,
+    #[value(alias = "rp2350")]
+    MotionController,
+    AudioController,
 }
 
 impl FirmwareTargetId {
     /// Resolve the selected target to its exported deploy metadata.
     pub fn metadata(self) -> &'static FirmwareTarget {
         match self {
-            Self::Rp2350 => &mortimmy_rp2350::DEPLOY_TARGET,
+            Self::MotionController => &mortimmy_rp2350::DEPLOY_TARGET_MOTION_CONTROLLER,
+            Self::AudioController => &mortimmy_rp2350::DEPLOY_TARGET_AUDIO_CONTROLLER,
         }
     }
 }
@@ -123,7 +126,7 @@ impl CargoProfile {
 pub fn firmware_elf_path(workspace: &Workspace, target: &FirmwareTarget, profile: &CargoProfile) -> PathBuf {
     workspace
         .root()
-        .join("target")
+    .join(target.artifact.cargo_target_dir)
         .join(target.artifact.target_triple)
         .join(profile.artifact_dir_name())
         .join(target.artifact.bin_name)
@@ -137,7 +140,7 @@ pub fn default_firmware_uf2_path(
 ) -> PathBuf {
     workspace
         .root()
-        .join("target")
+    .join(target.artifact.cargo_target_dir)
         .join(target.artifact.target_triple)
         .join(profile.artifact_dir_name())
         .join(format!("{}.uf2", target.artifact.bin_name))

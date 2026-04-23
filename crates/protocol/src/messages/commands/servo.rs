@@ -7,10 +7,3 @@ pub struct ServoCommand {
     pub pan: ServoTicks,
     pub tilt: ServoTicks,
 }
-
-/// Current servo position state after host clamping and firmware safety checks.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ServoStateTelemetry {
-    pub pan: ServoTicks,
-    pub tilt: ServoTicks,
-}

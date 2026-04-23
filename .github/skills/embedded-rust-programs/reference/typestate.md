@@ -11,7 +11,7 @@ Typestate encodes state in types so invalid transitions fail at compile time.
 
 ## Bad Uses
 
-- Live robot modes such as `Idle`, `Teleop`, `Autonomous`, or `Fault`.
+- Live robot modes such as `Teleop`, `Autonomous`, or `Fault`.
 - Autonomy plans that change because of timers, sensors, reconnects, or operator input.
 - Control loops that must react to runtime telemetry.
 

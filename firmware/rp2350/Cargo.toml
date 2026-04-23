@@ -11,11 +11,28 @@ path = "src/lib.rs"
 name = "mortimmy-rp2350"
 path = "src/main.rs"
 
+[features]
+default = ["board-motion-controller"]
+board-motion-controller = [
+    "capability-drive",
+    "capability-servo",
+    "driver-l298n",
+    "sensor-ultrasonic",
+]
+board-audio-controller = ["capability-audio-output", "ui-display"]
+capability-drive = ["mortimmy-protocol/capability-drive"]
+capability-servo = ["mortimmy-protocol/capability-servo"]
+capability-audio-output = []
+driver-l298n = []
+sensor-ultrasonic = []
+sensor-battery = []
+ui-display = []
+
 [dependencies]
 mortimmy-core = { path = "../../crates/core" }
 mortimmy-deploy = { path = "../../crates/deploy" }
 mortimmy-drivers = { path = "../../crates/drivers" }
-mortimmy-protocol = { path = "../../crates/protocol" }
+mortimmy-protocol = { path = "../../crates/protocol", default-features = false }
 
 [target.'cfg(all(target_arch = "arm", target_os = "none"))'.dependencies]
 cortex-m.workspace = true

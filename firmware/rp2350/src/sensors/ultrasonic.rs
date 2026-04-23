@@ -1,5 +1,5 @@
 use mortimmy_core::Millimeters;
-use mortimmy_protocol::messages::RangeTelemetry;
+use mortimmy_protocol::messages::telemetry::RangeTelemetry;
 
 /// Runtime state for ultrasonic ranging.
 #[derive(Clone, Copy, Debug, Default)]

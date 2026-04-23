@@ -1,4 +1,4 @@
-use mortimmy_protocol::messages::BatteryTelemetry;
+use mortimmy_protocol::messages::telemetry::BatteryTelemetry;
 
 /// Runtime state for battery monitoring.
 #[derive(Clone, Copy, Debug, Default)]

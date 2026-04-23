@@ -2,7 +2,11 @@ use anyhow::{Result, anyhow, bail};
 use mortimmy_protocol::{
     FrameDecoder, MAX_FRAME_BODY_LEN, MAX_PAYLOAD_LEN, decode_message, encode_message, wrap_payload,
 };
-use mortimmy_protocol::messages::{Command, Telemetry, WireMessage};
+use mortimmy_protocol::messages::{
+    WireMessage,
+    command::Command,
+    telemetry::{StatusTelemetry, Telemetry},
+};
 use mortimmy_rp2350::FirmwareScaffold;
 
 use crate::serial::{SerialBridge, SerialBridgeError, SerialConfig};
@@ -40,6 +44,14 @@ impl LoopbackPicoTransport {
             Some(WireMessage::Command(_)) => bail!("loopback transport received a command from the firmware side"),
             None => Ok(None),
         }
+    }
+
+    pub fn device_path(&self) -> &str {
+        self.host_bridge.config.primary_device_path()
+    }
+
+    pub fn status(&self) -> StatusTelemetry {
+        self.device.scaffold.status_telemetry()
     }
 }
 

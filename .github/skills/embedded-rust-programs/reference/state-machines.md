@@ -14,8 +14,9 @@ For hardware-facing APIs, this often means a mix of typestate at configuration t
 
 For control software, use runtime enums and transition methods.
 
-- `Idle`, `Teleop`, `Autonomous`, and `Fault` are runtime states.
+- `Teleop`, `Autonomous`, and `Fault` are runtime states.
 - Operator input, timeouts, reconnects, and telemetry can all trigger transitions.
+- Link loss should transition into `Fault`; reconnect should restore the last requested non-fault mode when the owner reasserts desired state.
 - Keep transitions centralized so side effects happen in one place.
 
 ## Mortimmy Rule

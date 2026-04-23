@@ -1,7 +1,7 @@
 #![allow(dead_code)]
 
 use mortimmy_core::Mode;
-use mortimmy_protocol::messages::Command;
+use mortimmy_protocol::messages::command::Command;
 
 /// Placeholder receive task state for the USB and serial link.
 #[derive(Clone, Copy, Debug, Default)]
@@ -27,7 +27,7 @@ impl LinkRxTask {
             }
             Command::PlayAudio(chunk) => self.last_audio_chunk_index = Some(chunk.chunk_index),
             Command::SetTrellisLeds(command) => self.last_trellis_led_mask = Some(command.led_mask),
-            Command::SetParam(_) | Command::Ping => {}
+            Command::SetParam(_) | Command::GetStatus | Command::Ping => {}
         }
     }
 }

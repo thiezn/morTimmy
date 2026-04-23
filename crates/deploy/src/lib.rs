@@ -30,6 +30,12 @@ pub struct Artifact {
     pub package_name: &'static str,
     /// Binary name emitted by the firmware crate.
     pub bin_name: &'static str,
+    /// Cargo feature flags that define this concrete firmware image.
+    pub cargo_features: &'static [&'static str],
+    /// Whether tooling should disable default features before enabling `cargo_features`.
+    pub cargo_no_default_features: bool,
+    /// Workspace-relative target directory used to isolate feature-specific artifacts.
+    pub cargo_target_dir: &'static str,
     /// Embedded target triple for the firmware artifact.
     pub target_triple: &'static str,
     /// Default build profile for deploy-oriented commands.
@@ -106,10 +112,15 @@ mod tests {
                 manifest_path: "firmware/example/Cargo.toml",
                 package_name: "example-firmware",
                 bin_name: "example-firmware",
+                cargo_features: &["board-example"],
+                cargo_no_default_features: true,
+                cargo_target_dir: "target/example-firmware",
                 target_triple: "thumbv8m.main-none-eabihf",
                 default_profile: BuildProfile::Debug,
             },
-            probe: Probe { chip: "ExampleChip" },
+            probe: Probe {
+                chip: "ExampleChip",
+            },
             uf2: Uf2 {
                 family_name: "EXAMPLE",
                 family_id: 0x1234_5678,
@@ -124,6 +135,9 @@ mod tests {
         };
 
         assert_eq!(TARGET.artifact.default_profile.as_str(), "debug");
+        assert_eq!(TARGET.artifact.cargo_features, &["board-example"]);
+        assert!(TARGET.artifact.cargo_no_default_features);
+        assert_eq!(TARGET.artifact.cargo_target_dir, "target/example-firmware");
         assert_eq!(TARGET.uf2.family_id, 0x1234_5678);
         assert_eq!(TARGET.bootsel.manual_steps[0], "Press BOOTSEL");
     }

@@ -1,5 +1,8 @@
 use mortimmy_core::Millimeters;
 
+#[path = "ultrasonic/hc_sr04.rs"]
+pub mod hc_sr04;
+
 /// Trait implemented by ultrasonic ranging sensors.
 pub trait UltrasonicSensor {
     /// Driver-specific error type.

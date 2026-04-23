@@ -192,7 +192,7 @@ mod tests {
         let path = dir.join("config.toml");
 
         let mut config = AppConfig::default();
-        config.serial.device_path = "/dev/ttyUSB0".to_string();
+        config.serial.device_paths = vec!["/dev/ttyUSB0".to_string(), "/dev/ttyUSB1".to_string()];
         config.serial.baud_rate = 230_400;
         config.session.health_check_interval_ms = 1_500;
         config.session.reconnect_interval_ms = 750;
@@ -212,6 +212,25 @@ mod tests {
         let loaded = load(&path).unwrap();
 
         assert_eq!(config, loaded);
+
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn load_rejects_legacy_single_serial_device_field() {
+        let dir = unique_temp_dir("pi_daemon_config_legacy_serial");
+        let path = dir.join("config.toml");
+
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            &path,
+            "[serial]\ndevice_path = \"/dev/ttyUSB9\"\nbaud_rate = 115200\n",
+        )
+        .unwrap();
+
+        let error = load(&path).unwrap_err();
+
+        assert!(format!("{error:#}").contains("unknown field `device_path`"));
 
         let _ = std::fs::remove_dir_all(dir);
     }

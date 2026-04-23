@@ -1,10 +1,11 @@
-#![allow(dead_code)]
-
 //! Host-side command clamping and arbitration policy.
 
 use mortimmy_core::{DEFAULT_LIMITS, Mode, PwmTicks, RobotLimits, ServoTicks};
 use mortimmy_protocol::messages::{
-    Command, DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
+    command::Command,
+    commands::{
+        DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
+    },
 };
 
 use crate::input::DriveIntent;
@@ -18,7 +19,7 @@ pub struct RouterPolicy {
 impl Default for RouterPolicy {
     fn default() -> Self {
         Self {
-            default_mode: Mode::Idle,
+            default_mode: Mode::Teleop,
             limits: DEFAULT_LIMITS,
         }
     }
@@ -94,7 +95,10 @@ impl RouterPolicy {
 #[cfg(test)]
 mod tests {
     use mortimmy_core::{Mode, ServoTicks};
-    use mortimmy_protocol::messages::{Command, ParameterKey};
+    use mortimmy_protocol::messages::commands::{
+        DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
+    };
+    use mortimmy_protocol::messages::command::Command;
 
     use crate::input::DriveIntent;
 
@@ -125,7 +129,7 @@ mod tests {
         assert_eq!(router.ping_command(), Command::Ping);
         assert_eq!(
             router.link_timeout_update(750),
-            Command::SetParam(mortimmy_protocol::messages::ParameterUpdate {
+            Command::SetParam(ParameterUpdate {
                 key: ParameterKey::LinkTimeoutMs,
                 value: 750,
             })
@@ -142,7 +146,7 @@ mod tests {
                 turn: 0,
                 speed: 300,
             }),
-            mortimmy_protocol::messages::DriveCommand {
+            DriveCommand {
                 left: mortimmy_core::PwmTicks(300),
                 right: mortimmy_core::PwmTicks(300),
             }
@@ -158,13 +162,13 @@ mod tests {
                 }),
                 router.centered_servo(),
             ),
-            Command::SetDesiredState(mortimmy_protocol::messages::DesiredStateCommand::new(
+            Command::SetDesiredState(DesiredStateCommand::new(
                 Mode::Teleop,
-                mortimmy_protocol::messages::DriveCommand {
+                DriveCommand {
                     left: mortimmy_core::PwmTicks(300),
                     right: mortimmy_core::PwmTicks(300),
                 },
-                mortimmy_protocol::messages::ServoCommand {
+                ServoCommand {
                     pan: ServoTicks(0),
                     tilt: ServoTicks(0),
                 },
@@ -177,7 +181,7 @@ mod tests {
                 turn: -DriveIntent::AXIS_MAX,
                 speed: 300,
             }),
-            mortimmy_protocol::messages::DriveCommand {
+            DriveCommand {
                 left: mortimmy_core::PwmTicks(0),
                 right: mortimmy_core::PwmTicks(300),
             }

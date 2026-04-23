@@ -1,6 +1,6 @@
 #![allow(dead_code)]
 
-use mortimmy_protocol::messages::Telemetry;
+use mortimmy_protocol::messages::telemetry::Telemetry;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

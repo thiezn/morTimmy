@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::{Command, Telemetry};
+use super::{command::Command, telemetry::Telemetry};
 
 /// Top-level bidirectional protocol message.
 #[allow(clippy::large_enum_variant)]

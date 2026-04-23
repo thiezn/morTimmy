@@ -1,6 +1,10 @@
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use mortimmy_core::{Mode, ServoTicks};
-use mortimmy_protocol::messages::{Command, ServoCommand, Telemetry};
+use mortimmy_protocol::messages::{
+    command::Command,
+    commands::ServoCommand,
+    telemetry::Telemetry,
+};
 use tokio::time::{Duration, Instant, sleep};
 
 use crate::{
@@ -90,15 +94,10 @@ impl RobotBrain {
                 match self.transport.try_connect().await {
                     Ok(()) => {
                         input.resume()?;
-                        self.autonomy.reset();
-                        self.desired_mode = self.router.default_mode;
-                        self.desired_servo = self.router.centered_servo();
-                        self.active_control_state = ControlState::default();
-                        self.last_desired_state_at = None;
-                        self.applied_link_timeout_ms = None;
-                        self.last_contact_at = Instant::now();
+                        self.restore_desired_state_after_connect(Instant::now());
                         output.set_connection_status("connected".to_string())?;
                         output.set_control_state(self.active_control_state)?;
+                        self.query_controller_status(output).await?;
                         self.exchange_desired_state(output).await?;
                         output.log(LogLevel::Info, "pico transport connected".to_string())?;
                     }
@@ -183,13 +182,17 @@ impl RobotBrain {
                 Ok(BrainStep::Continue(self.exchange_desired_state_raw().await?))
             }
             BrainCommand::SetMode(mode) => {
+                let previous_mode = self.desired_mode;
                 self.desired_mode = mode;
                 if mode == Mode::Autonomous {
                     self.autonomy.reset();
                     let target = self.autonomy.target_at(Instant::now());
                     self.active_control_state = ControlState { drive: target.drive };
                     self.desired_servo = target.servo;
-                } else if matches!(mode, Mode::Idle | Mode::Fault) {
+                } else if mode == Mode::Fault {
+                    self.active_control_state = ControlState::default();
+                    self.desired_servo = self.router.centered_servo();
+                } else if previous_mode == Mode::Autonomous {
                     self.active_control_state = ControlState::default();
                 }
                 self.set_link_timeout_raw(self.desired_state_link_timeout_ms()).await?;
@@ -209,6 +212,24 @@ impl RobotBrain {
     async fn exchange(&mut self, command: Command) -> Result<BrainStep> {
         let response = self.transport.exchange_command(command).await?;
         Ok(BrainStep::Continue(response))
+    }
+
+    async fn query_controller_status<O>(&mut self, output: &mut O) -> Result<()>
+    where
+        O: SessionOutput,
+    {
+        let controllers = self.transport.connected_controllers();
+
+        if controllers.is_empty() {
+            return Err(anyhow!("controller discovery found no active controllers"));
+        }
+
+        for controller in controllers {
+            self.last_contact_at = Instant::now();
+            self.handle_telemetry(Telemetry::Status(controller.status), output)?;
+        }
+
+        Ok(())
     }
 
     fn desired_state_command(&self) -> Command {
@@ -259,6 +280,26 @@ impl RobotBrain {
         Ok(())
     }
 
+    fn restore_desired_state_after_connect(&mut self, now: Instant) {
+        self.autonomy.reset();
+        self.active_control_state = ControlState::default();
+        self.last_desired_state_at = None;
+        self.applied_link_timeout_ms = None;
+        self.last_contact_at = now;
+
+        match self.desired_mode {
+            Mode::Autonomous => {
+                let target = self.autonomy.target_at(now);
+                self.active_control_state = ControlState { drive: target.drive };
+                self.desired_servo = target.servo;
+            }
+            Mode::Teleop => {}
+            Mode::Fault => {
+                self.desired_servo = self.router.centered_servo();
+            }
+        }
+    }
+
     async fn exchange_desired_state_raw(&mut self) -> Result<Option<Telemetry>> {
         let response = self.transport.exchange_command(self.desired_state_command()).await?;
 
@@ -297,6 +338,7 @@ impl RobotBrain {
     where
         O: SessionOutput,
     {
+        let previous_mode = self.desired_mode;
         self.desired_mode = mode;
 
         if mode == Mode::Autonomous {
@@ -313,7 +355,11 @@ impl RobotBrain {
             return self.exchange_desired_state(output).await;
         }
 
-        if matches!(mode, Mode::Idle | Mode::Fault) && self.active_control_state.drive.is_some() {
+        if mode == Mode::Fault {
+            self.active_control_state = ControlState::default();
+            self.desired_servo = self.router.centered_servo();
+            output.set_control_state(self.active_control_state)?;
+        } else if previous_mode == Mode::Autonomous && self.active_control_state.drive.is_some() {
             self.active_control_state = ControlState::default();
             output.set_control_state(self.active_control_state)?;
         }
@@ -341,7 +387,7 @@ impl RobotBrain {
     where
         O: SessionOutput,
     {
-        self.desired_mode = Mode::Idle;
+        self.desired_mode = self.router.default_mode;
         self.active_control_state = ControlState::default();
         self.desired_servo = self.router.centered_servo();
         self.last_desired_state_at = None;
@@ -408,7 +454,7 @@ impl RobotBrain {
         for event in events {
             match event {
                 InputEvent::Control(control_state) => {
-                    if self.desired_mode != Mode::Autonomous {
+                    if self.desired_mode == Mode::Teleop {
                         pending_control = Some(control_state);
                     }
                 }
@@ -465,8 +511,6 @@ impl RobotBrain {
     {
         input.suspend()?;
         self.autonomy.reset();
-        self.desired_mode = self.router.default_mode;
-        self.desired_servo = self.router.centered_servo();
         self.active_control_state = ControlState::default();
         self.last_desired_state_at = None;
         self.applied_link_timeout_ms = None;
@@ -495,8 +539,9 @@ mod tests {
     use std::time::Duration;
 
     use anyhow::{Result, anyhow};
-    use mortimmy_core::Mode;
-    use mortimmy_protocol::messages::Telemetry;
+    use mortimmy_core::{Mode, ServoTicks};
+    use mortimmy_protocol::messages::{commands::ServoCommand, telemetry::Telemetry};
+    use tokio::time::Instant;
 
     use super::COMMAND_COMPLETION_HOLD_GRACE;
 
@@ -576,12 +621,88 @@ mod tests {
 
         match brain.step(BrainCommand::Stop).await.unwrap() {
             BrainStep::Continue(Some(Telemetry::DesiredState(telemetry))) => {
-                assert_eq!(telemetry.mode, Mode::Idle);
+                assert_eq!(telemetry.mode, Mode::Teleop);
                 assert_eq!(telemetry.drive.left_pwm.0, 0);
                 assert_eq!(telemetry.drive.right_pwm.0, 0);
             }
             other => panic!("unexpected brain step: {other:?}"),
         }
+    }
+
+    #[test]
+    fn transport_failure_preserves_requested_teleop_mode_for_reconnect() {
+        let mut brain = RobotBrain::new(
+            RouterPolicy::default(),
+            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            TelemetryFanout::new(TelemetryConfig::default()),
+            SessionConfig::default(),
+        );
+        brain.desired_mode = Mode::Teleop;
+        brain.desired_servo = ServoCommand {
+            pan: ServoTicks(12),
+            tilt: ServoTicks(18),
+        };
+        brain.active_control_state = ControlState {
+            drive: Some(DriveIntent {
+                forward: DriveIntent::AXIS_MAX,
+                turn: 0,
+                speed: 300,
+            }),
+        };
+
+        let mut input = TrackingInput::default();
+        let mut output = NullSessionOutput;
+
+        brain
+            .handle_transport_failure(&mut input, &mut output, "link lost".to_string())
+            .unwrap();
+
+        assert_eq!(brain.desired_mode, Mode::Teleop);
+        assert_eq!(brain.active_control_state, ControlState::default());
+        assert_eq!(
+            brain.desired_servo,
+            ServoCommand {
+                pan: ServoTicks(12),
+                tilt: ServoTicks(18),
+            }
+        );
+    }
+
+    #[test]
+    fn reconnect_restores_autonomous_target_after_disconnect() {
+        let mut brain = RobotBrain::new(
+            RouterPolicy::default(),
+            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            TelemetryFanout::new(TelemetryConfig::default()),
+            SessionConfig::default(),
+        );
+        brain.desired_mode = Mode::Autonomous;
+        brain.active_control_state = ControlState {
+            drive: Some(DriveIntent {
+                forward: DriveIntent::AXIS_MAX,
+                turn: 0,
+                speed: 300,
+            }),
+        };
+
+        let mut input = TrackingInput::default();
+        let mut output = NullSessionOutput;
+        brain
+            .handle_transport_failure(&mut input, &mut output, "link lost".to_string())
+            .unwrap();
+
+        let now = Instant::now();
+        let expected_target = brain.autonomy.target_at(now);
+        brain.restore_desired_state_after_connect(now);
+
+        assert_eq!(brain.desired_mode, Mode::Autonomous);
+        assert_eq!(
+            brain.active_control_state,
+            ControlState {
+                drive: expected_target.drive,
+            }
+        );
+        assert_eq!(brain.desired_servo, expected_target.servo);
     }
 
     #[tokio::test]

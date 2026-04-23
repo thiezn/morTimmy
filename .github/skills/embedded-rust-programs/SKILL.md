@@ -35,10 +35,12 @@ If a state can legitimately change because of runtime events, it usually belongs
 ## Driver And Firmware Rules
 
 - Keep driver traits narrow and capability-oriented.
+- Separate board-role features from peripheral and driver features.
+- Let build and deploy tooling select supported feature bundles for each firmware image.
 - Make invalid states hard to represent.
 - Keep one apply path per control domain.
-- Distinguish `stationary` from `idle` explicitly.
 - Enforce limits in firmware even when the host clamps first.
+- Validate build-time board selection when exactly one controller image should be produced.
 - Prefer full desired-state snapshots over patch messages until payload size proves otherwise.
 - Keep telemetry shaped around acknowledgement and observability, not around transport accidents.
 

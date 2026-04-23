@@ -1,5 +1,8 @@
 use mortimmy_core::ServoTicks;
-use mortimmy_protocol::messages::{ServoCommand, ServoStateTelemetry};
+use mortimmy_protocol::messages::{
+    commands::ServoCommand,
+    telemetry::ServoStateTelemetry,
+};
 
 /// Runtime state for the pan/tilt servo pair.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -2,7 +2,9 @@
 
 use mortimmy_core::CoreError;
 use mortimmy_drivers::{AudioSampleFormat, AudioStreamConfig};
-use mortimmy_protocol::messages::{AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding};
+use mortimmy_protocol::messages::commands::{
+    AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding,
+};
 
 /// Default playback configuration for the Pico Audio Pack.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

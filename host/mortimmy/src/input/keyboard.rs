@@ -252,7 +252,7 @@ impl KeyboardInput {
 
     /// Human-readable keyboard command reference.
     pub const fn help_text() -> &'static str {
-        "Keyboard commands:\n  hold w | up           Drive forward while held\n  hold s | down         Drive backward while held\n  hold a | left         Turn left while held\n  hold d | right        Turn right while held\n  p                     Send a ping and expect pong telemetry\n  x | space             Stop the robot\n  t                     Switch to teleop mode\n  i                     Switch to idle mode\n  u                     Switch to autonomous mode (default servo-scan plan)\n  f                     Switch to fault mode\n  q | Ctrl-C            Exit the loop\n"
+        "Keyboard commands:\n  hold w | up           Drive forward while held\n  hold s | down         Drive backward while held\n  hold a | left         Turn left while held\n  hold d | right        Turn right while held\n  p                     Send a ping and expect pong telemetry\n  x | space             Stop the robot\n  t                     Switch to teleop mode\n  u                     Switch to autonomous mode (default servo-scan plan)\n  f                     Switch to fault mode\n  q | Ctrl-C            Exit the loop\n"
     }
 
     fn ensure_raw_mode(&mut self) -> Result<()> {
@@ -327,7 +327,6 @@ impl KeyboardInput {
                 'p' => Some(InputEvent::Command(BrainCommand::Ping)),
                 'x' => Some(InputEvent::Command(BrainCommand::Stop)),
                 't' => Some(InputEvent::Command(BrainCommand::SetMode(Mode::Teleop))),
-                'i' => Some(InputEvent::Command(BrainCommand::SetMode(Mode::Idle))),
                 'u' => Some(InputEvent::Command(BrainCommand::SetMode(Mode::Autonomous))),
                 'f' => Some(InputEvent::Command(BrainCommand::SetMode(Mode::Fault))),
                 'h' | '?' | 'w' | 'a' | 's' | 'd' => None,

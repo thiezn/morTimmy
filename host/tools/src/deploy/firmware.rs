@@ -42,6 +42,7 @@ fn build_firmware_artifact(workspace: &Workspace, command: &FirmwareBuildCommand
     let target = command.target.target.metadata();
     let profile = CargoProfile::from_cli_or_default(command.target.profile.as_ref(), target.artifact.default_profile);
     let manifest_path = workspace.path(target.artifact.manifest_path);
+    let cargo_target_dir = workspace.path(target.artifact.cargo_target_dir);
     let elf_path = firmware_elf_path(workspace, target, &profile);
     let mut build_command = std::process::Command::new("cargo");
 
@@ -52,8 +53,19 @@ fn build_firmware_artifact(workspace: &Workspace, command: &FirmwareBuildCommand
         .arg(&manifest_path)
         .arg("--bin")
         .arg(target.artifact.bin_name)
+        .arg("--target-dir")
+        .arg(&cargo_target_dir)
         .arg("--target")
         .arg(target.artifact.target_triple);
+
+    if target.artifact.cargo_no_default_features {
+        build_command.arg("--no-default-features");
+    }
+    if !target.artifact.cargo_features.is_empty() {
+        build_command
+            .arg("--features")
+            .arg(target.artifact.cargo_features.join(","));
+    }
     for arg in profile.cargo_args() {
         build_command.arg(arg);
     }
@@ -62,7 +74,9 @@ fn build_firmware_artifact(workspace: &Workspace, command: &FirmwareBuildCommand
         target = target.id,
         board = target.board_name,
         bin = target.artifact.bin_name,
+        features = ?target.artifact.cargo_features,
         profile = %profile.display_name(),
+        cargo_target_dir = %cargo_target_dir.display(),
         elf = %elf_path.display(),
         "building firmware artifact"
     );
