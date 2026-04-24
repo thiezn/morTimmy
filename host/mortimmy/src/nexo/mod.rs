@@ -10,7 +10,6 @@ use nexo_ws_schema::{
 use tokio::sync::{mpsc, oneshot};
 use tokio::time::sleep;
 
-pub const DEFAULT_GATEWAY_URL: &str = "ws://127.0.0.1:6969";
 const REQUEST_CHANNEL_CAPACITY: usize = 8;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -321,6 +320,7 @@ fn auth_token_from_env() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    pub const DEFAULT_GATEWAY_URL: &str = "ws://127.0.0.1:6969";
 
     #[tokio::test]
     #[ignore = "requires a local nexo-gateway on ws://127.0.0.1:6969"]

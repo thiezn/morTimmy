@@ -1,9 +1,6 @@
 # More ideas without priority
 
 - consider robot vacuum wheel base instead of four wheels. Ask for other stable options and pros and cons
-- Implemnent nexo-client into mortimmer
-- nexo clients should be able to send messages to other clients. Gateway will be central point there to send clients once they are there. No peer to peer client possible
-- iOS app needs to be able to start threads with clients, and also be able to launch tools by talking to the bot inside the chat with @nexo.
 - camera image with Gemma 4 and that segmenting flow that can draw things o. Top of image would be cool
 - teleoperated through iPhone with video would be fucking great. Especially if we allow multiple input controllers so we can use gamepad to the robot with video on phone.
 - design firmware update architecture. The robot should expose one usbc port that we can connect to. The pi will accept update commands and will update the firmware of all microcontrollers. It should also be able to update itself. It should also be able to poll an update server to fetch updates so that logic needs to be separated.

@@ -9,7 +9,7 @@ mod nexo;
 mod routing;
 mod serial;
 mod telemetry;
-mod ui;
+mod tui;
 mod websocket;
 
 use crate::cli::base::{Cli, Command};

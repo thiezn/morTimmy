@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
 use std::time::{Duration, Instant};
 
@@ -44,7 +43,6 @@ pub enum RoutedInputEvent {
     Command(BrainCommand),
     Control(ControlState),
     Warning(InputWarning),
-    Prompt(Option<String>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -60,10 +58,6 @@ impl SourcedInputEvent {
 }
 
 pub trait ControllerBackend {
-    fn instructions(&self) -> Option<Cow<'static, str>> {
-        None
-    }
-
     fn refresh_controllers(&mut self) -> Result<Vec<ControllerLifecycleEvent>>;
 
     fn poll_input(&mut self, timeout: Duration) -> Result<Option<SourcedInputEvent>>;
@@ -76,7 +70,11 @@ pub trait ControllerBackend {
         Ok(())
     }
 
-    fn extend_active_control(&mut self, _controller: &ControllerId, _duration: Duration) -> Result<()> {
+    fn extend_active_control(
+        &mut self,
+        _controller: &ControllerId,
+        _duration: Duration,
+    ) -> Result<()> {
         Ok(())
     }
 }
@@ -112,7 +110,8 @@ impl ControllerRegistry {
         match event {
             ControllerLifecycleEvent::Connected(info) => {
                 self.known_controllers.insert(info.id.clone(), info.clone());
-                self.pending_events.push_back(InputEvent::ControllerConnected(info));
+                self.pending_events
+                    .push_back(InputEvent::ControllerConnected(info));
             }
             ControllerLifecycleEvent::Disconnected(info) => {
                 self.known_controllers.remove(&info.id);
@@ -165,13 +164,11 @@ impl ControllerRegistry {
                 } else {
                     None
                 };
-                self.pending_events.push_back(InputEvent::Control(control_state));
+                self.pending_events
+                    .push_back(InputEvent::Control(control_state));
             }
             RoutedInputEvent::Warning(warning) => {
                 self.pending_events.push_back(InputEvent::Warning(warning));
-            }
-            RoutedInputEvent::Prompt(prompt) => {
-                self.pending_events.push_back(InputEvent::Prompt(prompt));
             }
         }
     }
@@ -193,26 +190,6 @@ impl ControllerRegistry {
 }
 
 impl CommandInputSource for ControllerRegistry {
-    fn instructions(&self) -> Option<Cow<'static, str>> {
-        let sections: Vec<_> = self
-            .backends
-            .iter()
-            .filter_map(|backend| backend.instructions())
-            .collect();
-
-        match sections.len() {
-            0 => None,
-            1 => sections.into_iter().next(),
-            _ => Some(Cow::Owned(
-                sections
-                    .into_iter()
-                    .map(|section| section.into_owned())
-                    .collect::<Vec<_>>()
-                    .join("\n\n"),
-            )),
-        }
-    }
-
     fn next_event(&mut self) -> Result<InputEvent> {
         loop {
             if let Some(event) = self.poll_event(Duration::from_millis(250))? {
@@ -307,7 +284,9 @@ mod tests {
 
     use anyhow::Result;
 
-    use crate::input::{CommandInputSource, ControllerId, ControllerInfo, ControllerKind, DriveIntent};
+    use crate::input::{
+        CommandInputSource, ControllerId, ControllerInfo, ControllerKind, DriveIntent,
+    };
 
     use super::{
         ControlState, ControllerBackend, ControllerLifecycleEvent, ControllerRegistry,
@@ -333,14 +312,23 @@ mod tests {
 
     impl ControllerBackend for MockBackend {
         fn refresh_controllers(&mut self) -> Result<Vec<ControllerLifecycleEvent>> {
-            Ok(self.state.borrow_mut().refreshes.pop_front().unwrap_or_default())
+            Ok(self
+                .state
+                .borrow_mut()
+                .refreshes
+                .pop_front()
+                .unwrap_or_default())
         }
 
         fn poll_input(&mut self, _timeout: Duration) -> Result<Option<SourcedInputEvent>> {
             Ok(self.state.borrow_mut().events.pop_front())
         }
 
-        fn extend_active_control(&mut self, controller: &ControllerId, duration: Duration) -> Result<()> {
+        fn extend_active_control(
+            &mut self,
+            controller: &ControllerId,
+            duration: Duration,
+        ) -> Result<()> {
             self.state
                 .borrow_mut()
                 .extended

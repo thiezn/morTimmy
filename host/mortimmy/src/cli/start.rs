@@ -8,17 +8,15 @@ use crate::{
     brain::transport::TransportBackendKind,
     camera::CameraBackendKind,
     config::{AppConfig, LogLevel, parse_nexo_platform},
-    input::{ControllerId, InputBackendKind, KeyboardDriveStyle},
+    input::{ControllerId, InputBackendKind},
 };
 
 #[derive(Debug, Args)]
 pub struct StartCommand {
     #[arg(long, value_name = "PATH")]
     pub config: Option<PathBuf>,
-    #[arg(long = "input-backend", value_enum, default_value_t = InputBackendKind::Keyboard)]
+    #[arg(long = "input-backend", value_enum, default_value_t = InputBackendKind::Tui)]
     pub input_backend: InputBackendKind,
-    #[arg(long = "keyboard-drive-style", value_enum, default_value_t = KeyboardDriveStyle::Wasd)]
-    pub keyboard_drive_style: KeyboardDriveStyle,
     #[arg(long = "controller-lock", value_name = "KIND:INSTANCE")]
     pub controller_lock: Option<ControllerId>,
     #[arg(long = "transport-backend", value_enum, default_value_t = TransportBackendKind::Serial)]

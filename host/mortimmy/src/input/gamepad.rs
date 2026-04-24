@@ -517,36 +517,15 @@ impl GamepadRuntime {
 struct GamepadBackend {
     runtime: SharedGamepadRuntime,
     filter: ControllerKind,
-    publish_instructions: bool,
 }
 
 impl GamepadBackend {
-    fn new(
-        runtime: SharedGamepadRuntime,
-        filter: ControllerKind,
-        publish_instructions: bool,
-    ) -> Self {
-        Self {
-            runtime,
-            filter,
-            publish_instructions,
-        }
-    }
-
-    fn instructions_text() -> &'static str {
-        "Gamepad commands:\n  left stick           Arcade drive, or left tread in tank mode\n  right stick Y        Right tread in tank mode\n  d-pad up             Toggle arcade/tank drive mode\n  d-pad left/right/down Arcade digital fallback\n  south / A / cross    Stop the robot\n  start / menu         Switch to teleop mode\n  mode / guide         Switch to autonomous mode\n  select / back        Switch to fault mode\n"
+    fn new(runtime: SharedGamepadRuntime, filter: ControllerKind) -> Self {
+        Self { runtime, filter }
     }
 }
 
 impl ControllerBackend for GamepadBackend {
-    fn instructions(&self) -> Option<Cow<'static, str>> {
-        if self.publish_instructions {
-            Some(Cow::Borrowed(Self::instructions_text()))
-        } else {
-            None
-        }
-    }
-
     fn refresh_controllers(&mut self) -> Result<Vec<ControllerLifecycleEvent>> {
         let mut runtime = self.runtime.borrow_mut();
         runtime.pump();
@@ -577,16 +556,12 @@ pub struct UsbGamepadInput {
 impl UsbGamepadInput {
     fn new(runtime: SharedGamepadRuntime) -> Self {
         Self {
-            backend: GamepadBackend::new(runtime, ControllerKind::GamepadUsb, true),
+            backend: GamepadBackend::new(runtime, ControllerKind::GamepadUsb),
         }
     }
 }
 
 impl ControllerBackend for UsbGamepadInput {
-    fn instructions(&self) -> Option<Cow<'static, str>> {
-        self.backend.instructions()
-    }
-
     fn refresh_controllers(&mut self) -> Result<Vec<ControllerLifecycleEvent>> {
         self.backend.refresh_controllers()
     }
@@ -611,16 +586,12 @@ pub struct BluetoothGamepadInput {
 impl BluetoothGamepadInput {
     fn new(runtime: SharedGamepadRuntime) -> Self {
         Self {
-            backend: GamepadBackend::new(runtime, ControllerKind::GamepadBluetooth, false),
+            backend: GamepadBackend::new(runtime, ControllerKind::GamepadBluetooth),
         }
     }
 }
 
 impl ControllerBackend for BluetoothGamepadInput {
-    fn instructions(&self) -> Option<Cow<'static, str>> {
-        self.backend.instructions()
-    }
-
     fn refresh_controllers(&mut self) -> Result<Vec<ControllerLifecycleEvent>> {
         self.backend.refresh_controllers()
     }

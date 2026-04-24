@@ -14,6 +14,7 @@ camera-nokhwa = ["dep:nokhwa"]
 
 [dependencies]
 anyhow.workspace = true
+arboard.workspace = true
 clap.workspace = true
 crossterm.workspace = true
 dirs.workspace = true
@@ -26,6 +27,7 @@ mortimmy-rp2350 = { path = "../../firmware/rp2350" }
 nexo-ws-client = { path = "../../../nexo/shared/nexo-ws-client" }
 nexo-ws-schema = { path = "../../../nexo/shared/nexo-ws-schema" }
 nokhwa = { workspace = true, optional = true }
+ratatui.workspace = true
 serde = { workspace = true, features = ["std"] }
 serde_json.workspace = true
 tokio.workspace = true

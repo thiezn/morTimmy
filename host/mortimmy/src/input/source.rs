@@ -122,16 +122,12 @@ impl ControllerInfo {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InputWarning {
-    UnknownKeyboardCommand(char),
     Status(Cow<'static, str>),
 }
 
 impl fmt::Display for InputWarning {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::UnknownKeyboardCommand(character) => {
-                write!(f, "unknown keyboard command: {character}")
-            }
             Self::Status(message) => f.write_str(message),
         }
     }
@@ -142,7 +138,6 @@ pub enum InputEvent {
     Command(BrainCommand),
     Control(ControlState),
     Warning(InputWarning),
-    Prompt(Option<String>),
     ControllerConnected(ControllerInfo),
     ControllerDisconnected(ControllerInfo),
 }
@@ -173,11 +168,6 @@ impl From<ControllerInfo> for InputEvent {
 
 /// Generic interface implemented by input backends that drive the robot brain.
 pub trait CommandInputSource {
-    /// Return human-readable usage information for this input backend.
-    fn instructions(&self) -> Option<Cow<'static, str>> {
-        None
-    }
-
     /// Block until the next high-level input event is available.
     fn next_event(&mut self) -> Result<InputEvent>;
 

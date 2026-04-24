@@ -11,16 +11,15 @@ use crate::{
     camera::CameraSubsystem,
     cli::{config::ConfigCommand, ping::PingCommand, start::StartCommand},
     config::{self, AppConfig, LogLevel},
-    input::{CommandInputSource, ControllerSelection, default_controller_registry},
+    input::{ControllerSelection, default_controller_registry},
     routing::RouterPolicy,
     telemetry::TelemetryFanout,
-    ui::{SessionOutput, SessionUi},
+    tui::{SessionOutput, TuiConfig, new_session},
     websocket::WebsocketServer,
 };
 
 pub async fn start(command: StartCommand) -> anyhow::Result<()> {
     let input_backend = command.input_backend;
-    let keyboard_drive_style = command.keyboard_drive_style;
     let controller_selection = command
         .controller_lock
         .clone()
@@ -36,6 +35,12 @@ pub async fn start(command: StartCommand) -> anyhow::Result<()> {
     let router = RouterPolicy::default();
     let telemetry = TelemetryFanout::new(runtime_config.telemetry.clone());
     let websocket = WebsocketServer::new(runtime_config.websocket.clone());
+    let serial_target = runtime_config.serial.display_paths();
+    let controller_selection_label = match &controller_selection {
+        ControllerSelection::Any => "any".to_string(),
+        ControllerSelection::Locked(controller) => controller.to_string(),
+    };
+    let workspace_root = std::env::current_dir().context("failed to determine workspace root")?;
     let audio_one_second_plan = audio.plan_waveform(
         runtime_config.audio.sample_rate_hz as usize * usize::from(runtime_config.audio.channels),
     );
@@ -53,49 +58,53 @@ pub async fn start(command: StartCommand) -> anyhow::Result<()> {
     );
 
     match input_backend {
-        crate::input::InputBackendKind::Keyboard => {
-            let mut input = default_controller_registry(
-                controller_selection.clone(),
-                keyboard_drive_style,
-                websocket.clone(),
+        crate::input::InputBackendKind::Tui => {
+            let controller_registry =
+                default_controller_registry(controller_selection.clone(), websocket.clone())?;
+            let (mut input, mut output) = new_session(
+                TuiConfig {
+                    workspace_root,
+                    config_path: config_path.display().to_string(),
+                    log_level: runtime_config.logging.level,
+                    no_color: runtime_config.logging.no_color,
+                    transport_label: format!("{transport_backend:?}"),
+                    serial_target: serial_target.clone(),
+                    controller_selection: controller_selection_label.clone(),
+                    nexo_gateway: runtime_config.nexo.gateway_url.clone(),
+                    nexo_client: format!(
+                        "{} {} {} {}",
+                        runtime_config.nexo.client_id,
+                        runtime_config.nexo.client_version,
+                        config::nexo_platform_as_str(runtime_config.nexo.platform),
+                        runtime_config.nexo.device_id,
+                    ),
+                    initial_mode: router.default_mode,
+                },
+                controller_registry,
             )?;
-            let instructions = input.instructions().unwrap_or_default();
-            let mut ui = SessionUi::new(
-                runtime_config.logging.level,
-                runtime_config.logging.no_color,
-                instructions.as_ref(),
-            )?;
-            ui.set_connection_status(format!(
+            output.set_connection_status(format!(
                 "connecting to {} via {:?}",
-                runtime_config.serial.display_paths(),
+                serial_target,
                 transport_backend,
             ))?;
-            ui.log(
+            output.log(
                 LogLevel::Info,
                 format!(
-                    "session starting: config={} baud={} health={}ms reconnect={}ms timeout={}ms nexo_gateway={} nexo_client={} nexo_version={} nexo_platform={} nexo_device={} telemetry={} audio={} camera={} chunks={} keyboard_style={} controller_selection={}",
+                    "session starting: config={} baud={} health={}ms reconnect={}ms timeout={}ms nexo_gateway={} telemetry={} audio={} camera={} chunks={} controller_selection={}",
                     config_path.display(),
                     runtime_config.serial.baud_rate,
                     runtime_config.session.health_check_interval_ms,
                     runtime_config.session.reconnect_interval_ms,
                     runtime_config.session.response_timeout_ms,
                     runtime_config.nexo.gateway_url,
-                    runtime_config.nexo.client_id,
-                    runtime_config.nexo.client_version,
-                    config::nexo_platform_as_str(runtime_config.nexo.platform),
-                    runtime_config.nexo.device_id,
                     runtime_config.telemetry.publish_interval_ms,
                     audio.config().enabled,
                     camera.config().enabled,
                     audio_one_second_plan.chunk_count,
-                    keyboard_drive_style.as_str(),
-                    match &controller_selection {
-                        ControllerSelection::Any => "any".to_string(),
-                        ControllerSelection::Locked(controller) => controller.to_string(),
-                    },
+                    controller_selection_label,
                 ),
             )?;
-            brain.run(&mut input, &mut ui).await?;
+            brain.run(&mut input, &mut output).await?;
         }
     }
 

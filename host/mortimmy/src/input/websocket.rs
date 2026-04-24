@@ -1,4 +1,3 @@
-use std::borrow::Cow;
 use std::collections::{BTreeMap, VecDeque};
 use std::io::ErrorKind;
 use std::net::{SocketAddr, TcpListener, TcpStream};
@@ -119,7 +118,6 @@ const fn default_websocket_drive_speed() -> u16 {
 
 #[derive(Debug)]
 pub struct WebsocketControllerInput {
-    bind_address: String,
     runtime: WebsocketRuntime,
     tracked_controllers: BTreeMap<ControllerId, ControllerInfo>,
     pending_lifecycle: VecDeque<ControllerLifecycleEvent>,
@@ -133,7 +131,6 @@ impl WebsocketControllerInput {
         let runtime = WebsocketRuntime::start(&bind_address)?;
 
         Ok(Self {
-            bind_address,
             runtime,
             tracked_controllers: BTreeMap::new(),
             pending_lifecycle: VecDeque::new(),
@@ -174,13 +171,6 @@ impl WebsocketControllerInput {
 }
 
 impl ControllerBackend for WebsocketControllerInput {
-    fn instructions(&self) -> Option<Cow<'static, str>> {
-        Some(Cow::Owned(format!(
-            "Websocket commands on ws://{}:\n  {{\"type\":\"control\",\"drive\":{{\"forward\":1.0,\"turn\":0.0,\"speed\":300}}}}\n  {{\"type\":\"control\",\"drive\":null}}\n  {{\"type\":\"command\",\"command\":\"ping\"}}\n  {{\"type\":\"command\",\"command\":\"stop\"}}\n  {{\"type\":\"command\",\"command\":\"teleop\"}}\n  {{\"type\":\"command\",\"command\":\"autonomous\"}}\n  {{\"type\":\"command\",\"command\":\"fault\"}}\n  {{\"type\":\"command\",\"command\":\"quit\"}}\n",
-            self.bind_address
-        )))
-    }
-
     fn refresh_controllers(&mut self) -> Result<Vec<ControllerLifecycleEvent>> {
         self.drain_runtime_events();
         Ok(self.pending_lifecycle.drain(..).collect())

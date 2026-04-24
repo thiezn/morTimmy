@@ -3,7 +3,8 @@ use std::collections::BTreeMap;
 use anyhow::{Result, anyhow};
 use mortimmy_core::{Mode, ServoTicks};
 use mortimmy_protocol::messages::{command::Command, commands::ServoCommand, telemetry::Telemetry};
-use tokio::time::{Duration, Instant, sleep};
+use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use tokio::time::{Duration, Instant};
 
 use crate::{
     brain::autonomy::{AutonomousTarget, AutonomyRunner},
@@ -12,7 +13,7 @@ use crate::{
     nexo::NexoGateway,
     routing::RouterPolicy,
     telemetry::TelemetryFanout,
-    ui::SessionOutput,
+    tui::SessionOutput,
 };
 
 use super::{BrainCommand, transport::BrainTransport};
@@ -36,6 +37,8 @@ pub struct RobotBrain {
     transport: BrainTransport,
     telemetry: TelemetryFanout,
     nexo: NexoGateway,
+    chat_event_tx: UnboundedSender<(LogLevel, String)>,
+    chat_event_rx: UnboundedReceiver<(LogLevel, String)>,
     autonomy: AutonomyRunner,
     active_controllers: BTreeMap<ControllerId, ControllerInfo>,
     desired_mode: Mode,
@@ -72,11 +75,14 @@ impl RobotBrain {
         let desired_mode = router.default_mode;
         let desired_servo = router.centered_servo();
         let reconnect_interval = Duration::from_millis(session.reconnect_interval_ms.max(1));
+        let (chat_event_tx, chat_event_rx) = mpsc::unbounded_channel();
         Self {
             router,
             transport,
             telemetry,
             nexo: NexoGateway::spawn_with_config(nexo_config, reconnect_interval),
+            chat_event_tx,
+            chat_event_rx,
             autonomy: AutonomyRunner::servo_scan(),
             active_controllers: BTreeMap::new(),
             desired_mode,
@@ -101,15 +107,19 @@ impl RobotBrain {
         if self.transport.is_connected() {
             output.set_connection_status("connected".to_string())?;
         }
+        output.set_desired_mode(self.desired_mode)?;
         output.set_control_state(self.active_control_state)?;
 
-        loop {
+        'run: loop {
+            self.drain_chat_events(output)?;
+
             if !self.transport.is_connected() {
                 match self.transport.try_connect().await {
                     Ok(()) => {
                         input.resume()?;
                         self.restore_desired_state_after_connect(Instant::now());
                         output.set_connection_status("connected".to_string())?;
+                        output.set_desired_mode(self.desired_mode)?;
                         output.set_control_state(self.active_control_state)?;
                         self.query_controller_status(output).await?;
                         self.exchange_desired_state(output).await?;
@@ -131,13 +141,40 @@ impl RobotBrain {
                                 "pico transport unavailable; pausing operator input until reconnect: {error}"
                             ),
                         )?;
-                        sleep(self.reconnect_interval).await;
+
+                        let reconnect_deadline = Instant::now() + self.reconnect_interval;
+                        while Instant::now() < reconnect_deadline {
+                            self.drain_chat_events(output)?;
+
+                            let wait = reconnect_deadline
+                                .saturating_duration_since(Instant::now())
+                                .min(self.input_poll_interval);
+                            if wait.is_zero() {
+                                break;
+                            }
+
+                            let events = self.collect_input_events(input, wait)?;
+                            if !events.is_empty() {
+                                match self.handle_input_events(input, output, events).await {
+                                    Ok(true) => break 'run,
+                                    Ok(false) => {}
+                                    Err(error) => {
+                                        output.log(
+                                            LogLevel::Warn,
+                                            format!(
+                                                "command unavailable while transport is disconnected: {error}"
+                                            ),
+                                        )?;
+                                    }
+                                }
+                            }
+                        }
                         continue;
                     }
                 }
             }
 
-            let events = self.collect_input_events(input)?;
+            let events = self.collect_input_events(input, self.input_poll_interval)?;
             if !events.is_empty() {
                 match self.handle_input_events(input, output, events).await {
                     Ok(true) => break,
@@ -178,6 +215,17 @@ impl RobotBrain {
                     continue;
                 }
             }
+        }
+
+        Ok(())
+    }
+
+    fn drain_chat_events<O>(&mut self, output: &mut O) -> Result<()>
+    where
+        O: SessionOutput,
+    {
+        while let Ok((level, message)) = self.chat_event_rx.try_recv() {
+            output.log(level, message)?;
         }
 
         Ok(())
@@ -384,6 +432,7 @@ impl RobotBrain {
     {
         let previous_mode = self.desired_mode;
         self.desired_mode = mode;
+        output.set_desired_mode(self.desired_mode)?;
 
         if mode == Mode::Autonomous {
             self.autonomy.reset();
@@ -398,6 +447,9 @@ impl RobotBrain {
             self.desired_servo = target.servo;
             self.last_desired_state_at = None;
             output.set_control_state(self.active_control_state)?;
+            if !self.transport.is_connected() {
+                return Ok(());
+            }
             return self.exchange_desired_state(output).await;
         }
 
@@ -411,6 +463,10 @@ impl RobotBrain {
         }
 
         self.last_desired_state_at = None;
+
+        if !self.transport.is_connected() {
+            return Ok(());
+        }
 
         self.exchange_desired_state(output).await
     }
@@ -426,6 +482,10 @@ impl RobotBrain {
 
         self.last_desired_state_at = None;
 
+        if !self.transport.is_connected() {
+            return Ok(());
+        }
+
         self.exchange_desired_state(output).await
     }
 
@@ -437,7 +497,13 @@ impl RobotBrain {
         self.active_control_state = ControlState::default();
         self.desired_servo = self.router.centered_servo();
         self.last_desired_state_at = None;
+        output.set_desired_mode(self.desired_mode)?;
         output.set_control_state(self.active_control_state)?;
+
+        if !self.transport.is_connected() {
+            return Ok(());
+        }
+
         self.exchange_desired_state(output).await
     }
 
@@ -479,14 +545,23 @@ impl RobotBrain {
         self.active_control_state = control_state;
         self.last_desired_state_at = None;
         output.set_control_state(control_state)?;
+
+        if !self.transport.is_connected() {
+            return Ok(());
+        }
+
         self.exchange_desired_state(output).await
     }
 
-    fn collect_input_events<I>(&mut self, input: &mut I) -> Result<Vec<InputEvent>>
+    fn collect_input_events<I>(
+        &mut self,
+        input: &mut I,
+        timeout: Duration,
+    ) -> Result<Vec<InputEvent>>
     where
         I: CommandInputSource,
     {
-        let Some(first_event) = input.poll_event(self.input_poll_interval)? else {
+        let Some(first_event) = input.poll_event(timeout)? else {
             return Ok(Vec::new());
         };
 
@@ -539,14 +614,7 @@ impl RobotBrain {
                     }
                 }
                 InputEvent::Warning(warning) => {
-                    let level = match &warning {
-                        crate::input::InputWarning::UnknownKeyboardCommand(_) => LogLevel::Warn,
-                        crate::input::InputWarning::Status(_) => LogLevel::Info,
-                    };
-                    output.log(level, warning.to_string())?;
-                }
-                InputEvent::Prompt(prompt) => {
-                    output.set_prompt(prompt)?;
+                    output.log(LogLevel::Info, warning.to_string())?;
                 }
                 InputEvent::Command(command) => {
                     if let Some(control_state) = pending_control.take() {
@@ -598,14 +666,17 @@ impl RobotBrain {
     where
         O: SessionOutput,
     {
-        output.log(LogLevel::Info, format!("sending chat prompt: {prompt}"))?;
+        output.log(LogLevel::Info, "sending chat prompt".to_string())?;
 
-        match self.nexo.chat(prompt).await {
-            Ok(reply) => output.log(LogLevel::Info, format!("nexo reply: {}", reply.content))?,
-            Err(error) => {
-                output.log(LogLevel::Error, format!("nexo chat failed: {error:#}"))?
-            }
-        }
+        let gateway = self.nexo.clone();
+        let chat_event_tx = self.chat_event_tx.clone();
+        tokio::spawn(async move {
+            let event = match gateway.chat(prompt).await {
+                Ok(reply) => (LogLevel::Info, format!("nexo reply: {}", reply.content)),
+                Err(error) => (LogLevel::Error, format!("nexo chat failed: {error:#}")),
+            };
+            let _ = chat_event_tx.send(event);
+        });
 
         Ok(())
     }
@@ -630,8 +701,8 @@ impl RobotBrain {
             "disconnected; retrying in {} ms",
             self.reconnect_interval.as_millis()
         ))?;
+        output.set_desired_mode(self.desired_mode)?;
         output.set_control_state(self.active_control_state)?;
-        output.set_prompt(None)?;
         output.log(LogLevel::Warn, message)?;
         self.transport.disconnect();
         Ok(())
@@ -671,12 +742,14 @@ mod tests {
         routing::RouterPolicy,
         serial::SerialConfig,
         telemetry::{TelemetryConfig, TelemetryFanout},
-        ui::{NullSessionOutput, SessionOutput},
+        tui::{NullSessionOutput, SessionOutput},
     };
 
     #[derive(Default)]
     struct TrackingInput {
         refreshed: Vec<Duration>,
+        polled: Vec<Duration>,
+        pending_events: std::collections::VecDeque<InputEvent>,
     }
 
     #[derive(Default)]
@@ -684,7 +757,7 @@ mod tests {
         logs: Vec<String>,
         connection_status: String,
         control_state: ControlState,
-        prompt: Option<String>,
+        desired_mode: Mode,
     }
 
     impl SessionOutput for RecordingOutput {
@@ -703,8 +776,8 @@ mod tests {
             Ok(())
         }
 
-        fn set_prompt(&mut self, prompt: Option<String>) -> Result<()> {
-            self.prompt = prompt;
+        fn set_desired_mode(&mut self, mode: Mode) -> Result<()> {
+            self.desired_mode = mode;
             Ok(())
         }
     }
@@ -712,6 +785,11 @@ mod tests {
     impl CommandInputSource for TrackingInput {
         fn next_event(&mut self) -> Result<InputEvent> {
             Err(anyhow!("tracking input is eventless"))
+        }
+
+        fn poll_event(&mut self, timeout: Duration) -> Result<Option<InputEvent>> {
+            self.polled.push(timeout);
+            Ok(self.pending_events.pop_front())
         }
 
         fn extend_active_control(&mut self, duration: Duration) -> Result<()> {
@@ -1030,6 +1108,108 @@ mod tests {
 
         assert!(!should_exit);
         assert_eq!(input.refreshed, vec![COMMAND_COMPLETION_HOLD_GRACE]);
+    }
+
+    #[tokio::test]
+    async fn chat_command_returns_without_waiting_for_gateway_reply() {
+        let mut brain = RobotBrain::new(
+            RouterPolicy::default(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
+            TelemetryFanout::new(TelemetryConfig::default()),
+            SessionConfig::default(),
+        );
+        let mut input = TrackingInput::default();
+        let mut output = RecordingOutput::default();
+
+        let should_exit = tokio::time::timeout(
+            Duration::from_millis(50),
+            brain.handle_input_events(
+                &mut input,
+                &mut output,
+                vec![InputEvent::Command(BrainCommand::Chat(
+                    "reply whenever you can".to_string(),
+                ))],
+            ),
+        )
+        .await
+        .expect("chat command handling timed out")
+        .unwrap();
+
+        assert!(!should_exit);
+        assert!(
+            output
+                .logs
+                .iter()
+                .any(|message| message == "sending chat prompt")
+        );
+    }
+
+    #[tokio::test]
+    async fn disconnected_mode_change_updates_output_without_transport_roundtrip() {
+        let mut brain = RobotBrain::new(
+            RouterPolicy::default(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
+            TelemetryFanout::new(TelemetryConfig::default()),
+            SessionConfig::default(),
+        );
+        let mut input = TrackingInput::default();
+        let mut output = RecordingOutput::default();
+
+        let should_exit = brain
+            .handle_input_events(
+                &mut input,
+                &mut output,
+                vec![InputEvent::Command(BrainCommand::SetMode(Mode::Fault))],
+            )
+            .await
+            .unwrap();
+
+        assert!(!should_exit);
+        assert_eq!(brain.desired_mode, Mode::Fault);
+        assert_eq!(output.desired_mode, Mode::Fault);
+        assert_eq!(output.control_state, ControlState::default());
+    }
+
+    #[tokio::test]
+    async fn collect_input_events_uses_requested_timeout_and_drains_followups() {
+        let mut brain = RobotBrain::new(
+            RouterPolicy::default(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
+            TelemetryFanout::new(TelemetryConfig::default()),
+            SessionConfig::default(),
+        );
+        let mut input = TrackingInput::default();
+        input.pending_events = std::collections::VecDeque::from([
+            InputEvent::Command(BrainCommand::Quit),
+            InputEvent::Command(BrainCommand::Ping),
+        ]);
+
+        let events = brain
+            .collect_input_events(&mut input, Duration::from_millis(1234))
+            .unwrap();
+
+        assert_eq!(
+            input.polled,
+            vec![Duration::from_millis(1234), Duration::ZERO, Duration::ZERO]
+        );
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0], InputEvent::Command(BrainCommand::Quit));
+        assert_eq!(events[1], InputEvent::Command(BrainCommand::Ping));
     }
 
     #[tokio::test]
