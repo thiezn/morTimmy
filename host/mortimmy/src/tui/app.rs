@@ -66,6 +66,32 @@ struct Runtime {
     pending_events: VecDeque<InputEvent>,
 }
 
+fn initial_model(config: TuiConfig) -> Model {
+    let mut model = Model {
+        log_level: config.log_level,
+        no_color: config.no_color,
+        summary: SummaryStatus {
+            config_path: config.config_path,
+            connection_status: "connecting".to_string(),
+            control_state: Default::default(),
+            desired_mode: config.initial_mode,
+            transport_label: config.transport_label,
+            serial_target: config.serial_target,
+            nexo_gateway: config.nexo_gateway,
+            nexo_client: config.nexo_client,
+            controller_selection: config.controller_selection,
+            active_controllers: Default::default(),
+        },
+        ..Model::default()
+    };
+    model.logs.push_back(UiLogEntry {
+        level: LogLevel::Info,
+        message: "session ready; type /help to view commands".to_string(),
+        repeats: 1,
+    });
+    model
+}
+
 pub fn new_session(
     config: TuiConfig,
     controller_registry: ControllerRegistry,
@@ -79,32 +105,11 @@ pub fn new_session(
         )
     })?;
 
-    let mut model = Model::default();
-    model.log_level = config.log_level;
-    model.no_color = config.no_color;
-    model.summary = SummaryStatus {
-        config_path: config.config_path,
-        connection_status: "connecting".to_string(),
-        control_state: Default::default(),
-        desired_mode: config.initial_mode,
-        transport_label: config.transport_label,
-        serial_target: config.serial_target,
-        nexo_gateway: config.nexo_gateway,
-        nexo_client: config.nexo_client,
-        controller_selection: config.controller_selection,
-        active_controllers: Default::default(),
-    };
-    model.logs.push_back(UiLogEntry {
-        level: LogLevel::Info,
-        message: "session ready; type /help to view commands".to_string(),
-        repeats: 1,
-    });
-
     let shared = Rc::new(RefCell::new(Runtime {
         terminal,
         controller_registry,
         file_index,
-        model,
+        model: initial_model(config),
         pending_events: VecDeque::new(),
     }));
     shared.borrow_mut().refresh_completions();
@@ -420,5 +425,47 @@ impl SessionOutput for TuiOutput {
 
     fn set_desired_mode(&mut self, mode: Mode) -> Result<()> {
         self.shared.borrow_mut().dispatch(Message::SetDesiredMode(mode))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use mortimmy_core::Mode;
+
+    use super::{TuiConfig, initial_model};
+    use crate::config::LogLevel;
+
+    #[test]
+    fn initial_model_carries_session_summary_and_banner_log() {
+        let model = initial_model(TuiConfig {
+            workspace_root: PathBuf::from("/tmp/mortimmy"),
+            config_path: "config/mortimmy.toml".to_string(),
+            log_level: LogLevel::Debug,
+            no_color: true,
+            transport_label: "loopback".to_string(),
+            serial_target: "/dev/tty.usbmodem".to_string(),
+            controller_selection: "any".to_string(),
+            nexo_gateway: "ws://127.0.0.1:6969".to_string(),
+            nexo_client: "mortimmy".to_string(),
+            initial_mode: Mode::Autonomous,
+        });
+
+        assert_eq!(model.log_level, LogLevel::Debug);
+        assert!(model.no_color);
+        assert_eq!(model.summary.config_path, "config/mortimmy.toml");
+        assert_eq!(model.summary.connection_status, "connecting");
+        assert_eq!(model.summary.desired_mode, Mode::Autonomous);
+        assert_eq!(model.summary.transport_label, "loopback");
+        assert_eq!(model.summary.serial_target, "/dev/tty.usbmodem");
+        assert_eq!(model.summary.controller_selection, "any");
+        assert_eq!(model.summary.nexo_gateway, "ws://127.0.0.1:6969");
+        assert_eq!(model.summary.nexo_client, "mortimmy");
+        assert!(model.summary.active_controllers.is_empty());
+        assert_eq!(model.logs.len(), 1);
+        assert_eq!(model.logs[0].level, LogLevel::Info);
+        assert_eq!(model.logs[0].message, "session ready; type /help to view commands");
+        assert_eq!(model.logs[0].repeats, 1);
     }
 }

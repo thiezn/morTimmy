@@ -10,4 +10,6 @@ pub mod update;
 pub mod view;
 
 pub use self::app::{TuiConfig, new_session};
-pub use self::session::{NullSessionOutput, SessionOutput};
+#[cfg(test)]
+pub use self::session::NullSessionOutput;
+pub use self::session::SessionOutput;

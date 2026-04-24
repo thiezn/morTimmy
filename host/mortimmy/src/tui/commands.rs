@@ -140,10 +140,10 @@ pub fn parse(input: &str, files: &FileIndex) -> Result<CommandAction> {
 }
 
 pub fn help_text(topic: Option<&str>) -> String {
-    if let Some(topic) = topic {
-        if let Some(spec) = command_spec(topic) {
-            return detailed_help_text(spec);
-        }
+    if let Some(topic) = topic
+        && let Some(spec) = command_spec(topic)
+    {
+        return detailed_help_text(spec);
     }
 
     let mut lines = vec!["Available commands:".to_string()];
@@ -376,7 +376,7 @@ mod tests {
     fn parses_chat_and_expands_file_references() {
         let root = unique_temp_dir("mortimmy_tui_parse_chat");
         std::fs::create_dir_all(&root).unwrap();
-        std::fs::write(&root.join("README.md"), "hello world\n").unwrap();
+        std::fs::write(root.join("README.md"), "hello world\n").unwrap();
         let files = FileIndex::discover(&root).unwrap();
 
         let parsed = parse("/chat explain @README.md", &files).unwrap();

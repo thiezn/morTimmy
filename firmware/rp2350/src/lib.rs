@@ -519,11 +519,11 @@ mod tests {
             DEPLOY_TARGET_MOTION_CONTROLLER.artifact.cargo_features,
             &["board-motion-controller"]
         );
-        assert!(
+        assert!(core::hint::black_box(
             DEPLOY_TARGET_MOTION_CONTROLLER
                 .artifact
                 .cargo_no_default_features
-        );
+        ));
         assert_eq!(
             DEPLOY_TARGET_MOTION_CONTROLLER.artifact.cargo_target_dir,
             "target/mortimmy-rp2350-motion-controller"

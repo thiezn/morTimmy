@@ -30,7 +30,7 @@ Each layer may evolve independently as long as **power interfaces and signal con
 
 ### Design Decision
 
-The system uses **a single battery source with centralized power distribution**, implemented through a dedicated **Power Distribution Board (PDB)** (Option A).
+The system uses **a single battery source with centralized power distribution**, implemented through a dedicated **Power Distribution Board (PDB)**
 
 All voltage regulation, protection, and branching occurs on this board.  
 No downstream module is allowed to create or cascade its own primary supply unless explicitly required.
@@ -88,7 +88,7 @@ It has no compute logic and performs no signaling functions beyond power deliver
 *   Ground plane with star‑ground topology
 
 
-## 4. Concrete System Architecture (Option A)
+## 4. System Architecture
 
                          ┌────────────────────┐
                          │    Battery Pack    │
@@ -162,7 +162,7 @@ Power delivery and data signaling are always routed separately except where stan
 | CAN (future) | Distributed modules    | Robust, fault tolerant       | Extra transceivers                  |
 
 
-## 7. Design Rules (Non‑Negotiable)
+## 7. Design Rules
 
 These rules define the system’s long‑term robustness.
 

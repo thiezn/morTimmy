@@ -40,9 +40,12 @@ struct GatewayWorker {
 }
 
 impl NexoGateway {
+    #[cfg(test)]
     pub fn spawn(url: impl Into<String>, reconnect_interval: Duration) -> Self {
-        let mut config = NexoConfig::default();
-        config.gateway_url = url.into();
+        let config = NexoConfig {
+            gateway_url: url.into(),
+            ..NexoConfig::default()
+        };
         Self::spawn_with_config(config, reconnect_interval)
     }
 

@@ -136,7 +136,9 @@ mod tests {
 
         assert_eq!(TARGET.artifact.default_profile.as_str(), "debug");
         assert_eq!(TARGET.artifact.cargo_features, &["board-example"]);
-        assert!(TARGET.artifact.cargo_no_default_features);
+        assert!(core::hint::black_box(
+            TARGET.artifact.cargo_no_default_features
+        ));
         assert_eq!(TARGET.artifact.cargo_target_dir, "target/example-firmware");
         assert_eq!(TARGET.uf2.family_id, 0x1234_5678);
         assert_eq!(TARGET.bootsel.manual_steps[0], "Press BOOTSEL");

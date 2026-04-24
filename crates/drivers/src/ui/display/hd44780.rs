@@ -56,6 +56,10 @@ impl<Rs, Enable, D4, D5, D6, D7, Delay> Hd44780Lcd1602<Rs, Enable, D4, D5, D6, D
     }
 
     /// Construct the display driver with explicit timing.
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the constructor maps directly onto the HD44780 control and data pins"
+    )]
     pub const fn with_config(
         rs: Rs,
         enable: Enable,
@@ -209,7 +213,7 @@ impl<Rs, Enable, D4, D5, D6, D7, Delay> Hd44780Lcd1602<Rs, Enable, D4, D5, D6, D
         D7: OutputPin<Error = PinError>,
     {
         self.d4
-            .set_state(((nibble >> 0) & 0x01 != 0).into())
+            .set_state((nibble & 0x01 != 0).into())
             .map_err(Hd44780Error::Pin)?;
         self.d5
             .set_state(((nibble >> 1) & 0x01 != 0).into())
@@ -274,11 +278,7 @@ where
 mod tests {
     extern crate std;
 
-    use std::{
-        cell::RefCell,
-        rc::Rc,
-        vec::Vec,
-    };
+    use std::{cell::RefCell, rc::Rc, vec::Vec};
 
     use embedded_hal::{
         delay::DelayNs,
@@ -289,9 +289,7 @@ mod tests {
     use crate::ui::display::CharacterDisplay;
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum FakePinError {
-        Injected,
-    }
+    struct FakePinError;
 
     impl embedded_hal::digital::Error for FakePinError {
         fn kind(&self) -> embedded_hal::digital::ErrorKind {
@@ -387,7 +385,10 @@ mod tests {
         fn delay_ns(&mut self, _ns: u32) {}
     }
 
-    fn build_lcd() -> (Hd44780Lcd1602<RsPin, EnablePin, DataPin, DataPin, DataPin, DataPin, FakeDelay>, Rc<RefCell<BusCapture>>) {
+    type TestLcd = Hd44780Lcd1602<RsPin, EnablePin, DataPin, DataPin, DataPin, DataPin, FakeDelay>;
+    type SharedBus = Rc<RefCell<BusCapture>>;
+
+    fn build_lcd() -> (TestLcd, SharedBus) {
         let bus = Rc::new(RefCell::new(BusCapture::default()));
         (
             Hd44780Lcd1602::new(
@@ -429,7 +430,10 @@ mod tests {
         lcd.initialize().unwrap();
 
         let bus = bus.borrow();
-        assert_eq!(&bus.nibbles[..4], &[(false, 0x03), (false, 0x03), (false, 0x03), (false, 0x02)]);
+        assert_eq!(
+            &bus.nibbles[..4],
+            &[(false, 0x03), (false, 0x03), (false, 0x03), (false, 0x02)]
+        );
 
         let bytes = decode_bytes(&bus.nibbles[4..]);
         assert!(bytes.contains(&(false, 0x28)));

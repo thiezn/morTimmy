@@ -845,9 +845,11 @@ mod tests {
 
     #[test]
     fn left_stick_maps_to_drive_control() {
-        let mut state = GamepadDriveState::default();
-        state.left_stick_y = -1.0;
-        state.left_stick_x = 0.25;
+        let state = GamepadDriveState {
+            left_stick_x: 0.25,
+            left_stick_y: -1.0,
+            ..GamepadDriveState::default()
+        };
 
         assert_eq!(
             state.to_control_state(GamepadDriveStyle::Arcade),

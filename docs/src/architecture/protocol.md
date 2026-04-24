@@ -60,9 +60,9 @@ Firmware-to-host telemetry covers:
 - Trellis pad events
 - `pong` replies
 
-## Why Full Snapshots
+## Why Full Desired State messages?
 
-The control snapshot is intentionally a full message rather than a field patch.
+The control message is intentionally a full message rather than a field patch.
 
 - The payload is small enough for postcard plus COBS framing over USB CDC.
 - A full snapshot keeps merge semantics trivial: the firmware only needs to remember the latest desired state.
@@ -77,16 +77,16 @@ If payload pressure ever becomes real, an explicit patch message can be added la
 sequenceDiagram
 	participant Input as Keyboard Input
 	participant Brain as RobotBrain
-	participant Link as Serial Bridge
+	participant Bridge as Serial Bridge
 	participant FW as Firmware ControlLoop
 
 	Input->>Brain: ControlState { drive = forward + left }
 	Brain->>Brain: Merge into desired state
-	Brain->>Link: Command::SetDesiredState(Teleop, drive, servo)
-	Link->>FW: WireMessage::Command(...)
+	Brain->>Bridge: Command::SetDesiredState(Teleop, drive, servo)
+	Bridge->>FW: WireMessage::Command(...)
 	FW->>FW: apply_desired_state(latest wins)
-	FW-->>Link: Telemetry::DesiredState(...)
-	Link-->>Brain: DesiredStateTelemetry
+	FW-->>Bridge: Telemetry::DesiredState(...)
+	Bridge-->>Brain: DesiredStateTelemetry
 ```
 
 ## Mixed Ping Sequence

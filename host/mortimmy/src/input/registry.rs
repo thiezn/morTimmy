@@ -11,16 +11,11 @@ use super::source::{
 
 const REGISTRY_POLL_SLICE: Duration = Duration::from_millis(10);
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Default)]
 pub enum ControllerSelection {
+    #[default]
     Any,
     Locked(ControllerId),
-}
-
-impl Default for ControllerSelection {
-    fn default() -> Self {
-        Self::Any
-    }
 }
 
 impl ControllerSelection {

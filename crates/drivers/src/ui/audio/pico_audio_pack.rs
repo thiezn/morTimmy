@@ -182,9 +182,7 @@ mod tests {
     use crate::ui::audio::{AudioOutput, AudioSampleFormat, AudioStreamConfig};
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum FakePinError {
-        Injected,
-    }
+    struct FakePinError;
 
     impl embedded_hal::digital::Error for FakePinError {
         fn kind(&self) -> embedded_hal::digital::ErrorKind {
@@ -193,9 +191,7 @@ mod tests {
     }
 
     #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-    enum FakeTransportError {
-        Injected,
-    }
+    struct FakeTransportError;
 
     #[derive(Clone, Debug, Default)]
     struct RecordingTransport {

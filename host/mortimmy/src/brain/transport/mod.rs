@@ -23,18 +23,13 @@ pub struct ConnectedController {
 }
 
 /// Selects which protocol transport backend the host brain uses.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum TransportBackendKind {
     /// Exchange framed protocol packets with an in-process firmware scaffold.
     Loopback,
     /// Exchange framed protocol packets with a live Pico USB CDC serial device.
+    #[default]
     Serial,
-}
-
-impl Default for TransportBackendKind {
-    fn default() -> Self {
-        Self::Serial
-    }
 }
 
 /// Host-side transport abstraction for protocol commands and telemetry.

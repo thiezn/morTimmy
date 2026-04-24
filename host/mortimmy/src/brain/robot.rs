@@ -55,6 +55,7 @@ pub struct RobotBrain {
 
 impl RobotBrain {
     /// Construct the robot brain from a router policy, transport, and telemetry fanout.
+    #[cfg(test)]
     pub fn new(
         router: RouterPolicy,
         transport: BrainTransport,
@@ -203,17 +204,17 @@ impl RobotBrain {
                 .last_desired_state_at
                 .map(|last| last.elapsed() >= self.desired_state_sync_interval())
                 .unwrap_or(true);
-            if should_refresh {
-                if let Err(error) = self.exchange_desired_state(output).await {
-                    self.handle_transport_failure(
-                        input,
-                        output,
-                        format!(
-                            "pico transport desired-state sync failed; pausing operator input until reconnect: {error}"
-                        ),
-                    )?;
-                    continue;
-                }
+            if should_refresh
+                && let Err(error) = self.exchange_desired_state(output).await
+            {
+                self.handle_transport_failure(
+                    input,
+                    output,
+                    format!(
+                        "pico transport desired-state sync failed; pausing operator input until reconnect: {error}"
+                    ),
+                )?;
+                continue;
             }
         }
 
@@ -231,6 +232,7 @@ impl RobotBrain {
         Ok(())
     }
 
+    #[cfg(test)]
     pub fn active_controllers(&self) -> impl Iterator<Item = &ControllerInfo> {
         self.active_controllers.values()
     }
@@ -878,8 +880,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn transport_failure_preserves_requested_teleop_mode_for_reconnect() {
+    #[tokio::test]
+    async fn transport_failure_preserves_requested_teleop_mode_for_reconnect() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
             BrainTransport::from_kind(
@@ -922,8 +924,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn reconnect_restores_autonomous_target_after_disconnect() {
+    #[tokio::test]
+    async fn reconnect_restores_autonomous_target_after_disconnect() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
             BrainTransport::from_kind(
@@ -1193,11 +1195,13 @@ mod tests {
             TelemetryFanout::new(TelemetryConfig::default()),
             SessionConfig::default(),
         );
-        let mut input = TrackingInput::default();
-        input.pending_events = std::collections::VecDeque::from([
-            InputEvent::Command(BrainCommand::Quit),
-            InputEvent::Command(BrainCommand::Ping),
-        ]);
+        let mut input = TrackingInput {
+            pending_events: std::collections::VecDeque::from([
+                InputEvent::Command(BrainCommand::Quit),
+                InputEvent::Command(BrainCommand::Ping),
+            ]),
+            ..TrackingInput::default()
+        };
 
         let events = brain
             .collect_input_events(&mut input, Duration::from_millis(1234))
