@@ -1,16 +1,15 @@
+use std::collections::BTreeMap;
+
 use anyhow::{Result, anyhow};
 use mortimmy_core::{Mode, ServoTicks};
-use mortimmy_protocol::messages::{
-    command::Command,
-    commands::ServoCommand,
-    telemetry::Telemetry,
-};
+use mortimmy_protocol::messages::{command::Command, commands::ServoCommand, telemetry::Telemetry};
 use tokio::time::{Duration, Instant, sleep};
 
 use crate::{
-    brain::autonomy::{AutonomyRunner, AutonomousTarget},
-    config::{LogLevel, SessionConfig},
-    input::{CommandInputSource, ControlState, InputEvent},
+    brain::autonomy::{AutonomousTarget, AutonomyRunner},
+    config::{LogLevel, NexoConfig, SessionConfig},
+    input::{CommandInputSource, ControlState, ControllerId, ControllerInfo, InputEvent},
+    nexo::NexoGateway,
     routing::RouterPolicy,
     telemetry::TelemetryFanout,
     ui::SessionOutput,
@@ -36,7 +35,9 @@ pub struct RobotBrain {
     router: RouterPolicy,
     transport: BrainTransport,
     telemetry: TelemetryFanout,
+    nexo: NexoGateway,
     autonomy: AutonomyRunner,
+    active_controllers: BTreeMap<ControllerId, ControllerInfo>,
     desired_mode: Mode,
     desired_servo: ServoCommand,
     active_control_state: ControlState,
@@ -57,19 +58,32 @@ impl RobotBrain {
         telemetry: TelemetryFanout,
         session: SessionConfig,
     ) -> Self {
+        Self::with_nexo(router, transport, telemetry, session, NexoConfig::default())
+    }
+
+    pub fn with_nexo(
+        router: RouterPolicy,
+        transport: BrainTransport,
+        telemetry: TelemetryFanout,
+        session: SessionConfig,
+        nexo_config: NexoConfig,
+    ) -> Self {
         let now = Instant::now();
         let desired_mode = router.default_mode;
         let desired_servo = router.centered_servo();
+        let reconnect_interval = Duration::from_millis(session.reconnect_interval_ms.max(1));
         Self {
             router,
             transport,
             telemetry,
+            nexo: NexoGateway::spawn_with_config(nexo_config, reconnect_interval),
             autonomy: AutonomyRunner::servo_scan(),
+            active_controllers: BTreeMap::new(),
             desired_mode,
             desired_servo,
             active_control_state: ControlState::default(),
             health_check_interval: Duration::from_millis(session.health_check_interval_ms.max(1)),
-            reconnect_interval: Duration::from_millis(session.reconnect_interval_ms.max(1)),
+            reconnect_interval,
             active_desired_state_interval: ACTIVE_DESIRED_STATE_INTERVAL,
             input_poll_interval: INPUT_POLL_INTERVAL,
             last_contact_at: now,
@@ -169,6 +183,10 @@ impl RobotBrain {
         Ok(())
     }
 
+    pub fn active_controllers(&self) -> impl Iterator<Item = &ControllerInfo> {
+        self.active_controllers.values()
+    }
+
     /// Handle one operator command.
     pub async fn step(&mut self, command: BrainCommand) -> Result<BrainStep> {
         match command {
@@ -178,8 +196,11 @@ impl RobotBrain {
                 self.desired_mode = self.router.default_mode;
                 self.active_control_state = ControlState::default();
                 self.desired_servo = self.router.centered_servo();
-                self.set_link_timeout_raw(self.desired_state_link_timeout_ms()).await?;
-                Ok(BrainStep::Continue(self.exchange_desired_state_raw().await?))
+                self.set_link_timeout_raw(self.desired_state_link_timeout_ms())
+                    .await?;
+                Ok(BrainStep::Continue(
+                    self.exchange_desired_state_raw().await?,
+                ))
             }
             BrainCommand::SetMode(mode) => {
                 let previous_mode = self.desired_mode;
@@ -187,7 +208,9 @@ impl RobotBrain {
                 if mode == Mode::Autonomous {
                     self.autonomy.reset();
                     let target = self.autonomy.target_at(Instant::now());
-                    self.active_control_state = ControlState { drive: target.drive };
+                    self.active_control_state = ControlState {
+                        drive: target.drive,
+                    };
                     self.desired_servo = target.servo;
                 } else if mode == Mode::Fault {
                     self.active_control_state = ControlState::default();
@@ -195,16 +218,23 @@ impl RobotBrain {
                 } else if previous_mode == Mode::Autonomous {
                     self.active_control_state = ControlState::default();
                 }
-                self.set_link_timeout_raw(self.desired_state_link_timeout_ms()).await?;
-                Ok(BrainStep::Continue(self.exchange_desired_state_raw().await?))
+                self.set_link_timeout_raw(self.desired_state_link_timeout_ms())
+                    .await?;
+                Ok(BrainStep::Continue(
+                    self.exchange_desired_state_raw().await?,
+                ))
             }
+            BrainCommand::Chat(_) => Err(anyhow!("chat commands require session output")),
             BrainCommand::Servo { pan, tilt } => {
                 self.desired_servo = ServoCommand {
                     pan: ServoTicks(pan),
                     tilt: ServoTicks(tilt),
                 };
-                self.set_link_timeout_raw(self.desired_state_link_timeout_ms()).await?;
-                Ok(BrainStep::Continue(self.exchange_desired_state_raw().await?))
+                self.set_link_timeout_raw(self.desired_state_link_timeout_ms())
+                    .await?;
+                Ok(BrainStep::Continue(
+                    self.exchange_desired_state_raw().await?,
+                ))
             }
         }
     }
@@ -233,8 +263,11 @@ impl RobotBrain {
     }
 
     fn desired_state_command(&self) -> Command {
-        self.router
-            .desired_state_command(self.desired_mode, self.active_control_state.drive, self.desired_servo)
+        self.router.desired_state_command(
+            self.desired_mode,
+            self.active_control_state.drive,
+            self.desired_servo,
+        )
     }
 
     fn is_default_desired_state(&self) -> bool {
@@ -263,7 +296,10 @@ impl RobotBrain {
             return Ok(None);
         }
 
-        let response = self.transport.exchange_command(self.router.link_timeout_update(milliseconds)).await?;
+        let response = self
+            .transport
+            .exchange_command(self.router.link_timeout_update(milliseconds))
+            .await?;
         self.applied_link_timeout_ms = Some(milliseconds);
         self.last_contact_at = Instant::now();
         Ok(response)
@@ -273,7 +309,10 @@ impl RobotBrain {
     where
         O: SessionOutput,
     {
-        if let Some(telemetry) = self.set_link_timeout_raw(self.desired_state_link_timeout_ms()).await? {
+        if let Some(telemetry) = self
+            .set_link_timeout_raw(self.desired_state_link_timeout_ms())
+            .await?
+        {
             self.handle_telemetry(telemetry, output)?;
         }
 
@@ -290,7 +329,9 @@ impl RobotBrain {
         match self.desired_mode {
             Mode::Autonomous => {
                 let target = self.autonomy.target_at(now);
-                self.active_control_state = ControlState { drive: target.drive };
+                self.active_control_state = ControlState {
+                    drive: target.drive,
+                };
                 self.desired_servo = target.servo;
             }
             Mode::Teleop => {}
@@ -301,7 +342,10 @@ impl RobotBrain {
     }
 
     async fn exchange_desired_state_raw(&mut self) -> Result<Option<Telemetry>> {
-        let response = self.transport.exchange_command(self.desired_state_command()).await?;
+        let response = self
+            .transport
+            .exchange_command(self.desired_state_command())
+            .await?;
 
         let now = Instant::now();
         self.last_contact_at = now;
@@ -348,7 +392,9 @@ impl RobotBrain {
                 format!("autonomy plan active: {}", self.autonomy.plan_name()),
             )?;
             let target = self.autonomy.target_at(Instant::now());
-            self.active_control_state = ControlState { drive: target.drive };
+            self.active_control_state = ControlState {
+                drive: target.drive,
+            };
             self.desired_servo = target.servo;
             self.last_desired_state_at = None;
             output.set_control_state(self.active_control_state)?;
@@ -395,7 +441,11 @@ impl RobotBrain {
         self.exchange_desired_state(output).await
     }
 
-    async fn apply_autonomous_target<O>(&mut self, target: AutonomousTarget, output: &mut O) -> Result<bool>
+    async fn apply_autonomous_target<O>(
+        &mut self,
+        target: AutonomousTarget,
+        output: &mut O,
+    ) -> Result<bool>
     where
         O: SessionOutput,
     {
@@ -414,7 +464,11 @@ impl RobotBrain {
         Ok(true)
     }
 
-    async fn apply_control_state<O>(&mut self, control_state: ControlState, output: &mut O) -> Result<()>
+    async fn apply_control_state<O>(
+        &mut self,
+        control_state: ControlState,
+        output: &mut O,
+    ) -> Result<()>
     where
         O: SessionOutput,
     {
@@ -444,7 +498,12 @@ impl RobotBrain {
         Ok(events)
     }
 
-    async fn handle_input_events<I, O>(&mut self, input: &mut I, output: &mut O, events: Vec<InputEvent>) -> Result<bool>
+    async fn handle_input_events<I, O>(
+        &mut self,
+        input: &mut I,
+        output: &mut O,
+        events: Vec<InputEvent>,
+    ) -> Result<bool>
     where
         I: CommandInputSource,
         O: SessionOutput,
@@ -453,13 +512,41 @@ impl RobotBrain {
 
         for event in events {
             match event {
+                InputEvent::ControllerConnected(controller) => {
+                    self.active_controllers
+                        .insert(controller.id.clone(), controller.clone());
+                    output.log(
+                        LogLevel::Info,
+                        format!(
+                            "controller connected: {} ({})",
+                            controller.id, controller.display_name
+                        ),
+                    )?;
+                }
+                InputEvent::ControllerDisconnected(controller) => {
+                    self.active_controllers.remove(&controller.id);
+                    output.log(
+                        LogLevel::Info,
+                        format!(
+                            "controller disconnected: {} ({})",
+                            controller.id, controller.display_name
+                        ),
+                    )?;
+                }
                 InputEvent::Control(control_state) => {
                     if self.desired_mode == Mode::Teleop {
                         pending_control = Some(control_state);
                     }
                 }
                 InputEvent::Warning(warning) => {
-                    output.log(LogLevel::Warn, warning.to_string())?;
+                    let level = match &warning {
+                        crate::input::InputWarning::UnknownKeyboardCommand(_) => LogLevel::Warn,
+                        crate::input::InputWarning::Status(_) => LogLevel::Info,
+                    };
+                    output.log(level, warning.to_string())?;
+                }
+                InputEvent::Prompt(prompt) => {
+                    output.set_prompt(prompt)?;
                 }
                 InputEvent::Command(command) => {
                     if let Some(control_state) = pending_control.take() {
@@ -488,6 +575,9 @@ impl RobotBrain {
                             self.apply_desired_mode(mode, output).await?;
                             self.refresh_active_control_hold(input)?;
                         }
+                        BrainCommand::Chat(prompt) => {
+                            self.handle_chat_command(prompt, output).await?;
+                        }
                         BrainCommand::Servo { pan, tilt } => {
                             self.apply_desired_servo(pan, tilt, output).await?;
                             self.refresh_active_control_hold(input)?;
@@ -504,13 +594,35 @@ impl RobotBrain {
         Ok(false)
     }
 
-    fn handle_transport_failure<I, O>(&mut self, input: &mut I, output: &mut O, message: String) -> Result<()>
+    async fn handle_chat_command<O>(&mut self, prompt: String, output: &mut O) -> Result<()>
+    where
+        O: SessionOutput,
+    {
+        output.log(LogLevel::Info, format!("sending chat prompt: {prompt}"))?;
+
+        match self.nexo.chat(prompt).await {
+            Ok(reply) => output.log(LogLevel::Info, format!("nexo reply: {}", reply.content))?,
+            Err(error) => {
+                output.log(LogLevel::Error, format!("nexo chat failed: {error:#}"))?
+            }
+        }
+
+        Ok(())
+    }
+
+    fn handle_transport_failure<I, O>(
+        &mut self,
+        input: &mut I,
+        output: &mut O,
+        message: String,
+    ) -> Result<()>
     where
         I: CommandInputSource,
         O: SessionOutput,
     {
         input.suspend()?;
         self.autonomy.reset();
+        self.active_controllers.clear();
         self.active_control_state = ControlState::default();
         self.last_desired_state_at = None;
         self.applied_link_timeout_ms = None;
@@ -519,6 +631,7 @@ impl RobotBrain {
             self.reconnect_interval.as_millis()
         ))?;
         output.set_control_state(self.active_control_state)?;
+        output.set_prompt(None)?;
         output.log(LogLevel::Warn, message)?;
         self.transport.disconnect();
         Ok(())
@@ -528,7 +641,10 @@ impl RobotBrain {
     where
         O: SessionOutput,
     {
-        output.log(LogLevel::Info, format!("telemetry {}: {telemetry:?}", telemetry.kind()))?;
+        output.log(
+            LogLevel::Info,
+            format!("telemetry {}: {telemetry:?}", telemetry.kind()),
+        )?;
         self.telemetry.publish(&telemetry);
         Ok(())
     }
@@ -546,18 +662,51 @@ mod tests {
     use super::COMMAND_COMPLETION_HOLD_GRACE;
 
     use crate::{
-        brain::{BrainCommand, BrainStep, RobotBrain, transport::{BrainTransport, TransportBackendKind}},
-        config::SessionConfig,
+        brain::{
+            BrainCommand, BrainStep, RobotBrain,
+            transport::{BrainTransport, TransportBackendKind},
+        },
+        config::{LogLevel, SessionConfig},
         input::{CommandInputSource, ControlState, DriveIntent, InputEvent, ScriptedInput},
         routing::RouterPolicy,
         serial::SerialConfig,
         telemetry::{TelemetryConfig, TelemetryFanout},
-        ui::NullSessionOutput,
+        ui::{NullSessionOutput, SessionOutput},
     };
 
     #[derive(Default)]
     struct TrackingInput {
         refreshed: Vec<Duration>,
+    }
+
+    #[derive(Default)]
+    struct RecordingOutput {
+        logs: Vec<String>,
+        connection_status: String,
+        control_state: ControlState,
+        prompt: Option<String>,
+    }
+
+    impl SessionOutput for RecordingOutput {
+        fn log(&mut self, _level: LogLevel, message: String) -> Result<()> {
+            self.logs.push(message);
+            Ok(())
+        }
+
+        fn set_connection_status(&mut self, status: String) -> Result<()> {
+            self.connection_status = status;
+            Ok(())
+        }
+
+        fn set_control_state(&mut self, control_state: ControlState) -> Result<()> {
+            self.control_state = control_state;
+            Ok(())
+        }
+
+        fn set_prompt(&mut self, prompt: Option<String>) -> Result<()> {
+            self.prompt = prompt;
+            Ok(())
+        }
     }
 
     impl CommandInputSource for TrackingInput {
@@ -575,24 +724,41 @@ mod tests {
     async fn ping_roundtrips_over_loopback_transport() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
-            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
             TelemetryFanout::new(TelemetryConfig::default()),
             SessionConfig::default(),
         );
 
-        assert_eq!(brain.step(BrainCommand::Ping).await.unwrap(), BrainStep::Continue(Some(Telemetry::Pong)));
+        assert_eq!(
+            brain.step(BrainCommand::Ping).await.unwrap(),
+            BrainStep::Continue(Some(Telemetry::Pong))
+        );
     }
 
     #[tokio::test]
     async fn drive_command_returns_motor_state_telemetry() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
-            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
             TelemetryFanout::new(TelemetryConfig::default()),
             SessionConfig::default(),
         );
 
-        match brain.step(BrainCommand::SetMode(Mode::Teleop)).await.unwrap() {
+        match brain
+            .step(BrainCommand::SetMode(Mode::Teleop))
+            .await
+            .unwrap()
+        {
             BrainStep::Continue(Some(Telemetry::DesiredState(telemetry))) => {
                 assert_eq!(telemetry.mode, Mode::Teleop);
                 assert_eq!(telemetry.drive.left_pwm.0, 0);
@@ -606,7 +772,12 @@ mod tests {
     async fn stop_command_returns_default_desired_state_telemetry() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
-            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
             TelemetryFanout::new(TelemetryConfig::default()),
             SessionConfig::default(),
         );
@@ -633,7 +804,12 @@ mod tests {
     fn transport_failure_preserves_requested_teleop_mode_for_reconnect() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
-            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
             TelemetryFanout::new(TelemetryConfig::default()),
             SessionConfig::default(),
         );
@@ -672,7 +848,12 @@ mod tests {
     fn reconnect_restores_autonomous_target_after_disconnect() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
-            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
             TelemetryFanout::new(TelemetryConfig::default()),
             SessionConfig::default(),
         );
@@ -709,7 +890,12 @@ mod tests {
     async fn run_loop_consumes_scripted_commands_until_quit() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
-            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
             TelemetryFanout::new(TelemetryConfig::default()),
             SessionConfig::default(),
         );
@@ -731,10 +917,48 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "requires a local nexo-gateway on ws://127.0.0.1:6969"]
+    async fn run_loop_logs_live_nexo_chat_reply() {
+        let mut brain = RobotBrain::new(
+            RouterPolicy::default(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
+            TelemetryFanout::new(TelemetryConfig::default()),
+            SessionConfig::default(),
+        );
+        let mut input = ScriptedInput::new([
+            InputEvent::Command(BrainCommand::Chat(
+                "Reply with a short greeting for mortimmy.".to_string(),
+            )),
+            InputEvent::Command(BrainCommand::Quit),
+        ]);
+        let mut output = RecordingOutput::default();
+
+        tokio::time::timeout(Duration::from_secs(90), brain.run(&mut input, &mut output))
+            .await
+            .expect("brain run timed out")
+            .unwrap();
+
+        assert!(output.logs.iter().any(|message| {
+            message.starts_with("nexo reply: ")
+                && !message.trim_start_matches("nexo reply: ").trim().is_empty()
+        }));
+    }
+
+    #[tokio::test]
     async fn run_loop_accepts_combined_drive_and_discrete_command_bursts() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
-            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
             TelemetryFanout::new(TelemetryConfig::default()),
             SessionConfig::default(),
         );
@@ -775,7 +999,12 @@ mod tests {
     async fn discrete_command_while_drive_is_active_refreshes_input_hold() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
-            BrainTransport::from_kind(TransportBackendKind::Loopback, SerialConfig::default(), Duration::from_secs(2)).unwrap(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
             TelemetryFanout::new(TelemetryConfig::default()),
             SessionConfig::default(),
         );
@@ -791,11 +1020,64 @@ mod tests {
         let mut output = NullSessionOutput;
 
         let should_exit = brain
-            .handle_input_events(&mut input, &mut output, vec![InputEvent::Command(BrainCommand::Ping)])
+            .handle_input_events(
+                &mut input,
+                &mut output,
+                vec![InputEvent::Command(BrainCommand::Ping)],
+            )
             .await
             .unwrap();
 
         assert!(!should_exit);
         assert_eq!(input.refreshed, vec![COMMAND_COMPLETION_HOLD_GRACE]);
+    }
+
+    #[tokio::test]
+    async fn controller_lifecycle_events_update_active_registry() {
+        let mut brain = RobotBrain::new(
+            RouterPolicy::default(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
+            TelemetryFanout::new(TelemetryConfig::default()),
+            SessionConfig::default(),
+        );
+        let controller = crate::input::ControllerInfo::new(
+            crate::input::ControllerId::new(crate::input::ControllerKind::Keyboard, "local"),
+            "Local Keyboard",
+        );
+        let mut input = TrackingInput::default();
+        let mut output = NullSessionOutput;
+
+        let should_exit = brain
+            .handle_input_events(
+                &mut input,
+                &mut output,
+                vec![InputEvent::ControllerConnected(controller.clone())],
+            )
+            .await
+            .unwrap();
+
+        assert!(!should_exit);
+        assert_eq!(brain.active_controllers().count(), 1);
+        assert_eq!(
+            brain.active_controllers.get(&controller.id),
+            Some(&controller)
+        );
+
+        let should_exit = brain
+            .handle_input_events(
+                &mut input,
+                &mut output,
+                vec![InputEvent::ControllerDisconnected(controller.clone())],
+            )
+            .await
+            .unwrap();
+
+        assert!(!should_exit);
+        assert!(brain.active_controllers().next().is_none());
     }
 }

@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
 use clap::ValueEnum;
+use nexo_ws_schema::Platform;
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -25,6 +26,51 @@ impl Default for SessionConfig {
             reconnect_interval_ms: 2_000,
             response_timeout_ms: 2_000,
         }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct NexoConfig {
+    pub gateway_url: String,
+    pub client_id: String,
+    pub client_version: String,
+    pub platform: Platform,
+    pub device_id: String,
+}
+
+impl Default for NexoConfig {
+    fn default() -> Self {
+        Self {
+            gateway_url: "ws://127.0.0.1:6969".to_string(),
+            client_id: "cli".to_string(),
+            client_version: env!("CARGO_PKG_VERSION").to_string(),
+            platform: Platform::Mortimmy,
+            device_id: "default_device".to_string(),
+        }
+    }
+}
+
+pub const fn nexo_platform_as_str(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Macos => "macos",
+        Platform::Ios => "ios",
+        Platform::Linux => "linux",
+        Platform::Windows => "windows",
+        Platform::Mortimmy => "mortimmy",
+    }
+}
+
+pub fn parse_nexo_platform(value: &str) -> std::result::Result<Platform, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "macos" => Ok(Platform::Macos),
+        "ios" => Ok(Platform::Ios),
+        "linux" => Ok(Platform::Linux),
+        "windows" => Ok(Platform::Windows),
+        "mortimmy" => Ok(Platform::Mortimmy),
+        _ => Err(format!(
+            "unknown nexo platform `{value}`; expected one of macos, ios, linux, windows, mortimmy"
+        )),
     }
 }
 
@@ -72,6 +118,7 @@ impl Default for LoggingConfig {
 pub struct AppConfig {
     pub serial: SerialConfig,
     pub session: SessionConfig,
+    pub nexo: NexoConfig,
     pub websocket: WebsocketConfig,
     pub telemetry: TelemetryConfig,
     pub audio: AudioConfig,
@@ -153,6 +200,7 @@ mod tests {
     #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
     use std::path::PathBuf;
+    use nexo_ws_schema::Platform;
 
     use super::{AppConfig, LogLevel, load, load_or_create, save};
     use crate::camera::CameraBackendKind;
@@ -197,6 +245,11 @@ mod tests {
         config.session.health_check_interval_ms = 1_500;
         config.session.reconnect_interval_ms = 750;
         config.session.response_timeout_ms = 3_000;
+        config.nexo.gateway_url = "ws://localhost:7777".to_string();
+        config.nexo.client_id = "cli-test".to_string();
+        config.nexo.client_version = "9.9.9".to_string();
+        config.nexo.platform = Platform::Linux;
+        config.nexo.device_id = "device-test".to_string();
         config.websocket.bind_address = "0.0.0.0:9010".to_string();
         config.telemetry.publish_interval_ms = 50;
         config.telemetry.queue_capacity = 512;

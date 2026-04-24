@@ -1,11 +1,12 @@
 use std::path::PathBuf;
 
 use clap::{Args, builder::BoolishValueParser};
+use nexo_ws_schema::Platform;
 
 use crate::{
     audio::AudioBackendKind,
     camera::CameraBackendKind,
-    config::{AppConfig, LogLevel},
+    config::{AppConfig, LogLevel, parse_nexo_platform},
 };
 
 #[derive(Debug, Args)]
@@ -16,6 +17,16 @@ pub struct ConfigCommand {
     pub serial_device: Vec<String>,
     #[arg(long = "serial-baud-rate")]
     pub serial_baud_rate: Option<u32>,
+    #[arg(long = "nexo-gateway-url")]
+    pub nexo_gateway_url: Option<String>,
+    #[arg(long = "nexo-client-id")]
+    pub nexo_client_id: Option<String>,
+    #[arg(long = "nexo-client-version")]
+    pub nexo_client_version: Option<String>,
+    #[arg(long = "nexo-platform", value_parser = parse_nexo_platform)]
+    pub nexo_platform: Option<Platform>,
+    #[arg(long = "nexo-device-id")]
+    pub nexo_device_id: Option<String>,
     #[arg(long)]
     pub websocket_bind: Option<String>,
     #[arg(long = "telemetry-publish-interval-ms")]
@@ -82,6 +93,21 @@ impl ConfigCommand {
         }
         if let Some(serial_baud_rate) = self.serial_baud_rate {
             config.serial.baud_rate = serial_baud_rate;
+        }
+        if let Some(nexo_gateway_url) = &self.nexo_gateway_url {
+            config.nexo.gateway_url = nexo_gateway_url.clone();
+        }
+        if let Some(nexo_client_id) = &self.nexo_client_id {
+            config.nexo.client_id = nexo_client_id.clone();
+        }
+        if let Some(nexo_client_version) = &self.nexo_client_version {
+            config.nexo.client_version = nexo_client_version.clone();
+        }
+        if let Some(nexo_platform) = self.nexo_platform {
+            config.nexo.platform = nexo_platform;
+        }
+        if let Some(nexo_device_id) = &self.nexo_device_id {
+            config.nexo.device_id = nexo_device_id.clone();
         }
         if let Some(websocket_bind) = &self.websocket_bind {
             config.websocket.bind_address = websocket_bind.clone();

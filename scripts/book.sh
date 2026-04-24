@@ -75,7 +75,7 @@ uv pip install wireviz --upgrade || { echo "❌ Failed to upgrade WireViz via pi
 brew install graphviz || { echo "❌ Failed to install Graphviz via Homebrew"; exit 1; }
 
 # Update tscircuit globally
-# npm update -g tscircuit || { echo "❌ Failed to update tscircuit globally"; exit 1; }
+# npm install -g tscircuit/cli || { echo "❌ Failed to install tscircuit globally"; exit 1; }
 
 
 ###############################################

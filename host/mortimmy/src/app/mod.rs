@@ -11,7 +11,7 @@ use crate::{
     camera::CameraSubsystem,
     cli::{config::ConfigCommand, ping::PingCommand, start::StartCommand},
     config::{self, AppConfig, LogLevel},
-    input::{CommandInputSource, KeyboardInput},
+    input::{CommandInputSource, ControllerSelection, default_controller_registry},
     routing::RouterPolicy,
     telemetry::TelemetryFanout,
     ui::{SessionOutput, SessionUi},
@@ -20,6 +20,12 @@ use crate::{
 
 pub async fn start(command: StartCommand) -> anyhow::Result<()> {
     let input_backend = command.input_backend;
+    let keyboard_drive_style = command.keyboard_drive_style;
+    let controller_selection = command
+        .controller_lock
+        .clone()
+        .map(ControllerSelection::Locked)
+        .unwrap_or_default();
     let transport_backend = command.transport_backend;
     let config_path = config::resolve_config_path(command.config.as_deref())?;
     let file_config = config::load_or_create(&config_path)?;
@@ -34,7 +40,7 @@ pub async fn start(command: StartCommand) -> anyhow::Result<()> {
         runtime_config.audio.sample_rate_hz as usize * usize::from(runtime_config.audio.channels),
     );
 
-    let mut brain = RobotBrain::new(
+    let mut brain = RobotBrain::with_nexo(
         router,
         BrainTransport::from_kind(
             transport_backend,
@@ -43,17 +49,21 @@ pub async fn start(command: StartCommand) -> anyhow::Result<()> {
         )?,
         telemetry,
         runtime_config.session.clone(),
+        runtime_config.nexo.clone(),
     );
-
-    let _ = &websocket;
 
     match input_backend {
         crate::input::InputBackendKind::Keyboard => {
-            let mut input = KeyboardInput::new();
+            let mut input = default_controller_registry(
+                controller_selection.clone(),
+                keyboard_drive_style,
+                websocket.clone(),
+            )?;
+            let instructions = input.instructions().unwrap_or_default();
             let mut ui = SessionUi::new(
                 runtime_config.logging.level,
                 runtime_config.logging.no_color,
-                input.instructions().unwrap_or_default(),
+                instructions.as_ref(),
             )?;
             ui.set_connection_status(format!(
                 "connecting to {} via {:?}",
@@ -63,16 +73,26 @@ pub async fn start(command: StartCommand) -> anyhow::Result<()> {
             ui.log(
                 LogLevel::Info,
                 format!(
-                    "session starting: config={} baud={} health={}ms reconnect={}ms timeout={}ms telemetry={}ms audio={} camera={} chunks={}",
+                    "session starting: config={} baud={} health={}ms reconnect={}ms timeout={}ms nexo_gateway={} nexo_client={} nexo_version={} nexo_platform={} nexo_device={} telemetry={} audio={} camera={} chunks={} keyboard_style={} controller_selection={}",
                     config_path.display(),
                     runtime_config.serial.baud_rate,
                     runtime_config.session.health_check_interval_ms,
                     runtime_config.session.reconnect_interval_ms,
                     runtime_config.session.response_timeout_ms,
+                    runtime_config.nexo.gateway_url,
+                    runtime_config.nexo.client_id,
+                    runtime_config.nexo.client_version,
+                    config::nexo_platform_as_str(runtime_config.nexo.platform),
+                    runtime_config.nexo.device_id,
                     runtime_config.telemetry.publish_interval_ms,
                     audio.config().enabled,
                     camera.config().enabled,
                     audio_one_second_plan.chunk_count,
+                    keyboard_drive_style.as_str(),
+                    match &controller_selection {
+                        ControllerSelection::Any => "any".to_string(),
+                        ControllerSelection::Locked(controller) => controller.to_string(),
+                    },
                 ),
             )?;
             brain.run(&mut input, &mut ui).await?;

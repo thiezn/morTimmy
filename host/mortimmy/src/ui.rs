@@ -18,6 +18,7 @@ pub trait SessionOutput {
     fn log(&mut self, level: LogLevel, message: String) -> Result<()>;
     fn set_connection_status(&mut self, status: String) -> Result<()>;
     fn set_control_state(&mut self, control_state: ControlState) -> Result<()>;
+    fn set_prompt(&mut self, prompt: Option<String>) -> Result<()>;
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -36,6 +37,10 @@ impl SessionOutput for NullSessionOutput {
     fn set_control_state(&mut self, _control_state: ControlState) -> Result<()> {
         Ok(())
     }
+
+    fn set_prompt(&mut self, _prompt: Option<String>) -> Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -52,6 +57,7 @@ pub struct SessionUi {
     logs: VecDeque<UiLogEntry>,
     connection_status: String,
     control_state: ControlState,
+    prompt: Option<String>,
     active: bool,
 }
 
@@ -64,6 +70,7 @@ impl SessionUi {
             logs: VecDeque::with_capacity(MAX_LOG_MESSAGES),
             connection_status: "Connecting".to_string(),
             control_state: ControlState::default(),
+            prompt: None,
             active: false,
         };
 
@@ -87,10 +94,17 @@ impl SessionUi {
         let width = usize::from(width.max(20));
         let height = usize::from(height.max(10));
 
+        let prompt_line = self
+            .prompt
+            .as_ref()
+            .map(|prompt| format!("Prompt: {prompt}"))
+            .unwrap_or_default();
+
         let mut lines = vec![
             TITLE.to_string(),
             format!("Connection: {}", self.connection_status),
             format!("Drive: {}", describe_control_state(self.control_state)),
+            prompt_line,
             String::new(),
         ];
         lines.extend(self.commands.iter().cloned());
@@ -148,6 +162,11 @@ impl SessionOutput for SessionUi {
 
     fn set_control_state(&mut self, control_state: ControlState) -> Result<()> {
         self.control_state = control_state;
+        self.render()
+    }
+
+    fn set_prompt(&mut self, prompt: Option<String>) -> Result<()> {
+        self.prompt = prompt.map(|prompt| prompt.replace(['\r', '\n'], " "));
         self.render()
     }
 }

@@ -39,21 +39,21 @@ cortex-m.workspace = true
 cortex-m-rt.workspace = true
 defmt.workspace = true
 defmt-rtt.workspace = true
-embassy-executor = { version = "0.7", features = [
+embassy-executor = { version = "0", features = [
     "arch-cortex-m",
     "executor-thread",
     "defmt",
 ] }
-embassy-futures = "0.1"
-embassy-rp = { version = "0.3", features = [
+embassy-futures = "0"
+embassy-rp = { version = "0", features = [
     "critical-section-impl",
     "defmt",
     "rp235xb",
     "time-driver",
 ] }
-embassy-time = { version = "0.4", features = ["defmt"] }
-embassy-usb = "0.4"
-panic-probe = { version = "0.3", features = ["print-defmt"] }
+embassy-time = { version = "0", features = ["defmt"] }
+embassy-usb = "0"
+panic-probe = { version = "1", features = ["print-defmt"] }
 static_cell = "2"
 
 [dev-dependencies]

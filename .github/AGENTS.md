@@ -5,3 +5,7 @@
 - Start with `docs/src/architecture/architecture.md`, `docs/src/architecture/protocol.md`, and `TODO.md`.
 - Validate with `cargo test --workspace --color never`; embedded-only check: `cargo check -p mortimmy-rp2350 --target thumbv8m.main-none-eabihf`.
 - Build docs with `./scripts/book.sh`
+
+## Guidelines
+
+- When adding rust dependency only use the latest major version, except there is a good reason to deviate. Do not specify minor or patch versions.

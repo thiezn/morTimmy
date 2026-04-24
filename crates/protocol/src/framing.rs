@@ -57,7 +57,9 @@ pub const fn encoded_frame_len(payload_len: usize) -> usize {
 /// Decode a single COBS-framed packet body without the trailing delimiter.
 pub fn decode_frame(frame: &[u8]) -> Result<DecodedFrame, FrameError> {
     let mut raw_frame = [0u8; MAX_RAW_FRAME_LEN];
-    let raw_len = cobs::decode(frame, &mut raw_frame).map_err(|_| FrameError::CobsDecode)?;
+    let raw_len = cobs::decode(frame, &mut raw_frame)
+        .map_err(|_| FrameError::CobsDecode)?
+        .frame_size();
     let frame = &raw_frame[..raw_len];
 
     if frame.len() < HEADER_LEN + CRC_LEN {
@@ -175,7 +177,9 @@ mod tests {
         let mut frame = [0u8; 32];
         let encoded = wrap_payload(&payload, 7, &mut frame).unwrap();
         let mut raw_frame = [0u8; MAX_RAW_FRAME_LEN];
-        let decoded_len = cobs::decode(&encoded[..encoded.len() - 1], &mut raw_frame).unwrap();
+        let decoded_len = cobs::decode(&encoded[..encoded.len() - 1], &mut raw_frame)
+            .unwrap()
+            .frame_size();
         raw_frame[HEADER_LEN] ^= 0xff;
 
         let mut corrupted = [0u8; 32];

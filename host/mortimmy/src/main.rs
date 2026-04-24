@@ -5,6 +5,7 @@ mod camera;
 mod cli;
 mod config;
 mod input;
+mod nexo;
 mod routing;
 mod serial;
 mod telemetry;

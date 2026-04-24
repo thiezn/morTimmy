@@ -1,13 +1,14 @@
 use std::path::PathBuf;
 
 use clap::{Args, builder::BoolishValueParser};
+use nexo_ws_schema::Platform;
 
 use crate::{
     audio::AudioBackendKind,
     brain::transport::TransportBackendKind,
     camera::CameraBackendKind,
-    config::{AppConfig, LogLevel},
-    input::InputBackendKind,
+    config::{AppConfig, LogLevel, parse_nexo_platform},
+    input::{ControllerId, InputBackendKind, KeyboardDriveStyle},
 };
 
 #[derive(Debug, Args)]
@@ -16,6 +17,10 @@ pub struct StartCommand {
     pub config: Option<PathBuf>,
     #[arg(long = "input-backend", value_enum, default_value_t = InputBackendKind::Keyboard)]
     pub input_backend: InputBackendKind,
+    #[arg(long = "keyboard-drive-style", value_enum, default_value_t = KeyboardDriveStyle::Wasd)]
+    pub keyboard_drive_style: KeyboardDriveStyle,
+    #[arg(long = "controller-lock", value_name = "KIND:INSTANCE")]
+    pub controller_lock: Option<ControllerId>,
     #[arg(long = "transport-backend", value_enum, default_value_t = TransportBackendKind::Serial)]
     pub transport_backend: TransportBackendKind,
     #[arg(long = "serial-device")]
@@ -28,6 +33,16 @@ pub struct StartCommand {
     pub reconnect_interval_ms: Option<u64>,
     #[arg(long = "response-timeout-ms")]
     pub response_timeout_ms: Option<u64>,
+    #[arg(long = "nexo-gateway-url")]
+    pub nexo_gateway_url: Option<String>,
+    #[arg(long = "nexo-client-id")]
+    pub nexo_client_id: Option<String>,
+    #[arg(long = "nexo-client-version")]
+    pub nexo_client_version: Option<String>,
+    #[arg(long = "nexo-platform", value_parser = parse_nexo_platform)]
+    pub nexo_platform: Option<Platform>,
+    #[arg(long = "nexo-device-id")]
+    pub nexo_device_id: Option<String>,
     #[arg(long)]
     pub websocket_bind: Option<String>,
     #[arg(long = "telemetry-publish-interval-ms")]
@@ -101,6 +116,21 @@ impl StartCommand {
         }
         if let Some(response_timeout_ms) = self.response_timeout_ms {
             config.session.response_timeout_ms = response_timeout_ms;
+        }
+        if let Some(nexo_gateway_url) = self.nexo_gateway_url {
+            config.nexo.gateway_url = nexo_gateway_url;
+        }
+        if let Some(nexo_client_id) = self.nexo_client_id {
+            config.nexo.client_id = nexo_client_id;
+        }
+        if let Some(nexo_client_version) = self.nexo_client_version {
+            config.nexo.client_version = nexo_client_version;
+        }
+        if let Some(nexo_platform) = self.nexo_platform {
+            config.nexo.platform = nexo_platform;
+        }
+        if let Some(nexo_device_id) = self.nexo_device_id {
+            config.nexo.device_id = nexo_device_id;
         }
         if let Some(websocket_bind) = self.websocket_bind {
             config.websocket.bind_address = websocket_bind;

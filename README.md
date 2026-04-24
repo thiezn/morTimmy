@@ -207,6 +207,29 @@ f | fault mode
 q | quit
 ```
 
+Switch the local keyboard to tank controls when you want per-tread input:
+
+```bash
+cargo run -p mortimmy -- start \
+  --config ./tmp/brain-loopback.toml \
+  --input-backend keyboard \
+  --keyboard-drive-style tank \
+  --transport-backend loopback
+```
+
+You can also press `m` while the session is running to toggle between `wasd` and `tank` driving. In tank mode, `w` and `s` control the left tread, `e` and `d` control the right tread, and `a` gives a left pivot shortcut by driving the left tread forward while reversing the right tread. To accept input from only one controller instead of letting the most recent controller win, pass `--controller-lock KIND:INSTANCE`, for example `--controller-lock keyboard:local`.
+
+Websocket controllers are now live on the configured bind address as well. Each websocket client appears as its own `websocket:client-N` controller, so `--controller-lock websocket:client-1` will pin the brain to the first connected websocket client. Send JSON text frames such as:
+
+```json
+{"type":"control","drive":{"forward":1.0,"turn":0.0,"speed":300}}
+{"type":"control","drive":null}
+{"type":"command","command":"ping"}
+{"type":"command","command":"teleop"}
+```
+
+`forward` and `turn` are normalized from `-1.0` to `1.0` and map onto the existing desired-state control path. Supported websocket commands are `ping`, `stop`, `teleop`, `autonomous`, `fault`, and `quit`.
+
 This path has been validated on this machine with `p` followed by `q`; the host logged startup, encoded the ping command over the shared protocol, and received `telemetry pong: Pong` back from the firmware scaffold.
 
 Run the same brain loop against a flashed Pico over USB CDC:
