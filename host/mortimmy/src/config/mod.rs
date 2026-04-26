@@ -1,8 +1,7 @@
-use std::fs;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result};
-use clap::ValueEnum;
+use cli_helpers::resolve_path;
 use nexo_ws_schema::Platform;
 use serde::{Deserialize, Serialize};
 
@@ -10,6 +9,9 @@ use crate::{
     audio::AudioConfig, camera::CameraConfig, serial::SerialConfig, telemetry::TelemetryConfig,
     websocket::WebsocketConfig,
 };
+
+pub use cli_helpers::LogLevel;
+pub use cli_helpers::config::{load, load_or_create, save};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
@@ -74,29 +76,6 @@ pub fn parse_nexo_platform(value: &str) -> std::result::Result<Platform, String>
     }
 }
 
-#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum LogLevel {
-    Trace,
-    Debug,
-    #[default]
-    Info,
-    Warn,
-    Error,
-}
-
-impl LogLevel {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Trace => "trace",
-            Self::Debug => "debug",
-            Self::Info => "info",
-            Self::Warn => "warn",
-            Self::Error => "error",
-        }
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct LoggingConfig {
@@ -126,67 +105,12 @@ pub struct AppConfig {
     pub logging: LoggingConfig,
 }
 
-pub fn load(path: &Path) -> Result<AppConfig> {
-    if !path.exists() {
-        return Ok(AppConfig::default());
-    }
-
-    let contents = fs::read_to_string(path)
-        .with_context(|| format!("failed to read config file {}", path.display()))?;
-
-    let config = toml::from_str(&contents)
-        .with_context(|| format!("failed to parse config file {}", path.display()))?;
-
-    Ok(config)
-}
-
-pub fn load_or_create(path: &Path) -> Result<AppConfig> {
-    if path.exists() {
-        return load(path);
-    }
-
-    let config = AppConfig::default();
-    save(&config, path)?;
-    Ok(config)
-}
-
-pub fn save(config: &AppConfig, path: &Path) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("failed to create config directory {}", parent.display()))?;
-    }
-
-    let serialized = toml::to_string_pretty(config).context("failed to serialize config")?;
-    fs::write(path, serialized)
-        .with_context(|| format!("failed to write config file {}", path.display()))?;
-
-    Ok(())
-}
-
 pub fn resolve_config_path(path: Option<&Path>) -> Result<PathBuf> {
     match path {
-        Some(path) => {
-            if let Some(path_str) = path.to_str()
-                && let Some(rest) = path_str.strip_prefix("~/")
-            {
-                let home_dir = dirs::home_dir().context("failed to determine home directory")?;
-                return Ok(home_dir.join(rest));
-            }
-
-            if path == Path::new("~") {
-                return dirs::home_dir().context("failed to determine home directory");
-            }
-
-            if path.is_absolute() {
-                return Ok(path.to_path_buf());
-            }
-
-            let cwd = std::env::current_dir().context("failed to determine current directory")?;
-            Ok(cwd.join(path))
-        }
+        Some(path) => Ok(resolve_path(path)?),
         None => {
-            if let Some(config_dir) = dirs::home_dir() {
-                return Ok(config_dir.join(".mortimmy").join("config.toml"));
+            if let Some(home_dir) = dirs::home_dir() {
+                return Ok(home_dir.join(".mortimmy").join("config.toml"));
             }
 
             let cwd = std::env::current_dir().context("failed to determine current directory")?;
@@ -199,8 +123,8 @@ pub fn resolve_config_path(path: Option<&Path>) -> Result<PathBuf> {
 mod tests {
     #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 
-    use std::path::PathBuf;
     use nexo_ws_schema::Platform;
+    use std::path::PathBuf;
 
     use super::{AppConfig, LogLevel, load, load_or_create, save};
     use crate::camera::CameraBackendKind;
@@ -218,7 +142,7 @@ mod tests {
         let dir = unique_temp_dir("pi_daemon_config_defaults");
         let path = dir.join("config.toml");
 
-        let config = load(&path).unwrap();
+        let config: AppConfig = load(&path).unwrap();
         assert_eq!(config, AppConfig::default());
     }
 
@@ -227,7 +151,7 @@ mod tests {
         let dir = unique_temp_dir("pi_daemon_config_bootstrap");
         let path = dir.join("config.toml");
 
-        let config = load_or_create(&path).unwrap();
+        let config: AppConfig = load_or_create(&path).unwrap();
         assert_eq!(config, AppConfig::default());
         assert!(path.exists());
 
@@ -281,7 +205,7 @@ mod tests {
         )
         .unwrap();
 
-        let error = load(&path).unwrap_err();
+        let error = load::<AppConfig>(&path).unwrap_err();
 
         assert!(format!("{error:#}").contains("unknown field `device_path`"));
 

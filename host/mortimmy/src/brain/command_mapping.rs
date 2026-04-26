@@ -1,15 +1,14 @@
-//! Host-side command clamping and arbitration policy.
+//! Host-side mapping from control state into protocol commands.
 
 use mortimmy_core::{DEFAULT_LIMITS, Mode, PwmTicks, RobotLimits, ServoTicks};
 use mortimmy_protocol::messages::{
     command::Command,
-    commands::{
-        DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
-    },
+    commands::{DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand},
 };
 
 use crate::input::DriveIntent;
 
+/// Host-owned defaults and safety limits used to build protocol commands.
 #[derive(Clone, Copy, Debug)]
 pub struct RouterPolicy {
     pub default_mode: Mode,
@@ -37,8 +36,7 @@ impl RouterPolicy {
     }
 
     /// Build the default centered servo target.
-    pub const fn centered_servo(&self) -> ServoCommand {
-        let _ = self;
+    pub const fn centered_servo() -> ServoCommand {
         ServoCommand {
             pan: ServoTicks(0),
             tilt: ServoTicks(0),
@@ -62,13 +60,24 @@ impl RouterPolicy {
 
     /// Convert a normalized drive intent into differential motor PWM values.
     pub fn drive_intent(&self, intent: DriveIntent) -> DriveCommand {
-        let forward = i32::from(intent.forward.clamp(-DriveIntent::AXIS_MAX, DriveIntent::AXIS_MAX));
-        let turn = i32::from(intent.turn.clamp(-DriveIntent::AXIS_MAX, DriveIntent::AXIS_MAX));
+        let forward = i32::from(
+            intent
+                .forward
+                .clamp(-DriveIntent::AXIS_MAX, DriveIntent::AXIS_MAX),
+        );
+        let turn = i32::from(
+            intent
+                .turn
+                .clamp(-DriveIntent::AXIS_MAX, DriveIntent::AXIS_MAX),
+        );
         let speed = i32::from(intent.speed.min(self.limits.max_drive_pwm.0 as u16));
 
         let left = forward + turn;
         let right = forward - turn;
-        let normalizer = left.abs().max(right.abs()).max(i32::from(DriveIntent::AXIS_MAX));
+        let normalizer = left
+            .abs()
+            .max(right.abs())
+            .max(i32::from(DriveIntent::AXIS_MAX));
 
         let scaled_left = left * speed / normalizer;
         let scaled_right = right * speed / normalizer;
@@ -76,15 +85,8 @@ impl RouterPolicy {
         self.clamp_drive(scaled_left as i16, scaled_right as i16)
     }
 
-    /// Build a ping command for link-health checks.
-    pub const fn ping_command(&self) -> Command {
-        let _ = self;
-        Command::Ping
-    }
-
     /// Build a command that updates the firmware link timeout.
-    pub const fn link_timeout_update(&self, milliseconds: u32) -> Command {
-        let _ = self;
+    pub const fn link_timeout_update(milliseconds: u32) -> Command {
         Command::SetParam(ParameterUpdate {
             key: ParameterKey::LinkTimeoutMs,
             value: milliseconds as i32,
@@ -95,10 +97,10 @@ impl RouterPolicy {
 #[cfg(test)]
 mod tests {
     use mortimmy_core::{Mode, ServoTicks};
+    use mortimmy_protocol::messages::command::Command;
     use mortimmy_protocol::messages::commands::{
         DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
     };
-    use mortimmy_protocol::messages::command::Command;
 
     use crate::input::DriveIntent;
 
@@ -124,11 +126,8 @@ mod tests {
 
     #[test]
     fn builds_control_messages() {
-        let router = RouterPolicy::default();
-
-        assert_eq!(router.ping_command(), Command::Ping);
         assert_eq!(
-            router.link_timeout_update(750),
+            RouterPolicy::link_timeout_update(750),
             Command::SetParam(ParameterUpdate {
                 key: ParameterKey::LinkTimeoutMs,
                 value: 750,
@@ -160,7 +159,7 @@ mod tests {
                     turn: 0,
                     speed: 300,
                 }),
-                router.centered_servo(),
+                RouterPolicy::centered_servo(),
             ),
             Command::SetDesiredState(DesiredStateCommand::new(
                 Mode::Teleop,

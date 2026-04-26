@@ -1,4 +1,5 @@
 use mortimmy_core::Mode;
+use mortimmy_protocol::messages::telemetry::RangeTelemetry;
 
 use crate::{
     config::LogLevel,
@@ -25,6 +26,7 @@ pub enum Message {
     SetConnectionStatus(String),
     SetControlState(ControlState),
     SetDesiredMode(Mode),
+    SetDistance(Option<RangeTelemetry>),
     Log(LogLevel, String),
     ShowHelp(bool),
     ControllerConnected(ControllerInfo),

@@ -511,6 +511,8 @@ async fn usb_link_session(
                 response = Some(WireMessage::Telemetry(Telemetry::Status(
                     scaffold.status_telemetry(),
                 )));
+            } else {
+                refresh_response_telemetry(&mut response, scaffold);
             }
 
             let Some(response) = response else {
@@ -542,6 +544,19 @@ async fn usb_link_session(
             }
         }
     }
+}
+
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+fn refresh_response_telemetry(response: &mut Option<WireMessage>, scaffold: &FirmwareScaffold) {
+    let Some(WireMessage::Telemetry(telemetry)) = response.as_mut() else {
+        return;
+    };
+
+    *telemetry = match *telemetry {
+        Telemetry::Status(_) => Telemetry::Status(scaffold.status_telemetry()),
+        Telemetry::DesiredState(_) => Telemetry::DesiredState(scaffold.desired_state_telemetry()),
+        other => other,
+    };
 }
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]

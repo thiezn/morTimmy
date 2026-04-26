@@ -13,11 +13,15 @@ use crossterm::event::{
     MouseEventKind,
 };
 use mortimmy_core::Mode;
+use mortimmy_protocol::messages::telemetry::RangeTelemetry;
 
 use crate::{
     brain::BrainCommand,
     config::LogLevel,
-    input::{CommandInputSource, ControllerRegistry, InputEvent},
+    input::{
+        CommandInputSource, ControllerId, ControllerInfo, ControllerKind, ControllerRegistry,
+        InputEvent, InputWarning,
+    },
 };
 
 use super::{
@@ -25,7 +29,7 @@ use super::{
     completion,
     files::FileIndex,
     message::Message,
-    model::{Model, SummaryStatus, UiLogEntry},
+    model::{InputMode, KeyboardDriveState, Model, SummaryStatus, UiLogEntry},
     session::SessionOutput,
     terminal::{self, TuiTerminal},
     update::{self, Action},
@@ -33,6 +37,8 @@ use super::{
 };
 
 const POLL_SLICE: Duration = Duration::from_millis(25);
+const TUI_KEYBOARD_CONTROLLER_INSTANCE: &str = "tui-local";
+const TUI_KEYBOARD_CONTROLLER_NAME: &str = "TUI Keyboard";
 
 #[derive(Debug, Clone)]
 pub struct TuiConfig {
@@ -75,6 +81,7 @@ fn initial_model(config: TuiConfig) -> Model {
             connection_status: "connecting".to_string(),
             control_state: Default::default(),
             desired_mode: config.initial_mode,
+            distance: None,
             transport_label: config.transport_label,
             serial_target: config.serial_target,
             nexo_gateway: config.nexo_gateway,
@@ -143,6 +150,12 @@ impl Runtime {
     }
 
     fn refresh_completions(&mut self) {
+        if self.model.input_mode.keyboard_drive().is_some() {
+            self.model.completions.clear();
+            self.model.selected_completion = 0;
+            return;
+        }
+
         self.model.completions = completion::suggestions(
             &self.model.command_input,
             self.model.cursor,
@@ -161,6 +174,9 @@ impl Runtime {
             Ok(CommandAction::Local(LocalCommand::Help(topic))) => {
                 self.model.help_topic = topic;
                 self.model.show_help = true;
+            }
+            Ok(CommandAction::Local(LocalCommand::EnterKeyboardDrive)) => {
+                self.enter_keyboard_drive_mode();
             }
             Err(error) => {
                 self.dispatch(Message::Log(
@@ -257,6 +273,10 @@ impl Runtime {
             return self.render();
         }
 
+        if self.model.input_mode.keyboard_drive().is_some() {
+            return self.handle_keyboard_drive_key(key);
+        }
+
         let message = match key.code {
             KeyCode::Enter => Some(Message::SubmitInput),
             KeyCode::Backspace => Some(Message::Backspace),
@@ -289,6 +309,109 @@ impl Runtime {
         }
 
         Ok(())
+    }
+
+    fn handle_keyboard_drive_key(&mut self, key: KeyEvent) -> Result<()> {
+        let mut should_render = false;
+        match key.code {
+            KeyCode::Esc | KeyCode::Char('q' | 'Q') => {
+                self.exit_keyboard_drive_mode();
+                should_render = true;
+            }
+            KeyCode::Char(character) => {
+                let character = character.to_ascii_lowercase();
+                if character == 't' {
+                    self.toggle_keyboard_drive_style();
+                    should_render = true;
+                } else {
+                    should_render = self.apply_keyboard_drive_key(character);
+                }
+            }
+            _ => {}
+        }
+
+        if should_render {
+            self.refresh_completions();
+            self.render()?;
+        }
+
+        Ok(())
+    }
+
+    fn enter_keyboard_drive_mode(&mut self) {
+        if self.model.input_mode.keyboard_drive().is_some() {
+            return;
+        }
+
+        self.model.input_mode = InputMode::KeyboardDrive(KeyboardDriveState::default());
+        self.model.command_input.clear();
+        self.model.cursor = 0;
+        self.model.show_help = false;
+        self.model.help_topic = None;
+        self.pending_events
+            .push_back(InputEvent::ControllerConnected(tui_keyboard_controller_info()));
+        self.pending_events.push_back(InputEvent::Warning(
+            InputWarning::Status(
+                "TUI keyboard drive active: w,a,s,d mode; press t for tank, Space to stop, Esc or q to exit"
+                    .into(),
+            ),
+        ));
+    }
+
+    fn exit_keyboard_drive_mode(&mut self) {
+        let Some(state) = self.model.input_mode.keyboard_drive() else {
+            return;
+        };
+
+        if state.control_state().drive.is_some() {
+            self.pending_events
+                .push_back(InputEvent::Control(Default::default()));
+        }
+        self.pending_events.push_back(InputEvent::ControllerDisconnected(
+            tui_keyboard_controller_info(),
+        ));
+        self.pending_events.push_back(InputEvent::Warning(
+            InputWarning::Status("TUI keyboard drive exited; command input restored".into()),
+        ));
+        self.model.input_mode = InputMode::Command;
+    }
+
+    fn toggle_keyboard_drive_style(&mut self) {
+        let Some(mut state) = self.model.input_mode.keyboard_drive() else {
+            return;
+        };
+
+        let had_drive = state.control_state().drive.is_some();
+        state.toggle_style();
+        self.model.input_mode = InputMode::KeyboardDrive(state);
+        if had_drive {
+            self.pending_events
+                .push_back(InputEvent::Control(Default::default()));
+        }
+        self.pending_events.push_back(InputEvent::Warning(
+            InputWarning::Status(
+                format!(
+                    "TUI keyboard drive style switched to {}",
+                    state.style.as_str()
+                )
+                .into(),
+            ),
+        ));
+    }
+
+    fn apply_keyboard_drive_key(&mut self, key: char) -> bool {
+        let Some(mut state) = self.model.input_mode.keyboard_drive() else {
+            return false;
+        };
+
+        if !state.apply_key(key) {
+            return false;
+        }
+
+        let control_state = state.control_state();
+        self.model.input_mode = InputMode::KeyboardDrive(state);
+        self.pending_events.push_back(InputEvent::Control(control_state));
+        true
     }
 
     fn handle_mouse_event(&mut self, mouse: MouseEvent) -> Result<()> {
@@ -330,6 +453,13 @@ fn contains(rect: ratatui::layout::Rect, column: u16, row: u16) -> bool {
         && column < rect.x.saturating_add(rect.width)
         && row >= rect.y
         && row < rect.y.saturating_add(rect.height)
+}
+
+fn tui_keyboard_controller_info() -> ControllerInfo {
+    ControllerInfo::new(
+        ControllerId::new(ControllerKind::Keyboard, TUI_KEYBOARD_CONTROLLER_INSTANCE),
+        TUI_KEYBOARD_CONTROLLER_NAME,
+    )
 }
 
 impl Drop for Runtime {
@@ -426,6 +556,12 @@ impl SessionOutput for TuiOutput {
     fn set_desired_mode(&mut self, mode: Mode) -> Result<()> {
         self.shared.borrow_mut().dispatch(Message::SetDesiredMode(mode))
     }
+
+    fn set_distance(&mut self, distance: Option<RangeTelemetry>) -> Result<()> {
+        self.shared
+            .borrow_mut()
+            .dispatch(Message::SetDistance(distance))
+    }
 }
 
 #[cfg(test)]
@@ -457,6 +593,7 @@ mod tests {
         assert_eq!(model.summary.config_path, "config/mortimmy.toml");
         assert_eq!(model.summary.connection_status, "connecting");
         assert_eq!(model.summary.desired_mode, Mode::Autonomous);
+        assert_eq!(model.summary.distance, None);
         assert_eq!(model.summary.transport_label, "loopback");
         assert_eq!(model.summary.serial_target, "/dev/tty.usbmodem");
         assert_eq!(model.summary.controller_selection, "any");

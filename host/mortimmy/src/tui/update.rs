@@ -91,6 +91,9 @@ pub fn update(model: &mut Model, msg: Message) -> Action {
         Message::SetDesiredMode(mode) => {
             model.summary.desired_mode = mode;
         }
+        Message::SetDistance(distance) => {
+            model.summary.distance = distance;
+        }
         Message::Log(level, message) => {
             if allows(model.log_level, level) {
                 let message = sanitize_message(message);

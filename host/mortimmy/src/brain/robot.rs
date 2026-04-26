@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use anyhow::{Result, anyhow};
 use mortimmy_core::{Mode, ServoTicks};
-use mortimmy_protocol::messages::{command::Command, commands::ServoCommand, telemetry::Telemetry};
+use mortimmy_protocol::messages::{command::Command, commands::ServoCommand, telemetry::{RangeTelemetry, Telemetry}};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{Duration, Instant};
 
@@ -11,12 +11,11 @@ use crate::{
     config::{LogLevel, NexoConfig, SessionConfig},
     input::{CommandInputSource, ControlState, ControllerId, ControllerInfo, InputEvent},
     nexo::NexoGateway,
-    routing::RouterPolicy,
     telemetry::TelemetryFanout,
     tui::SessionOutput,
 };
 
-use super::{BrainCommand, transport::BrainTransport};
+use super::{BrainCommand, command_mapping::RouterPolicy, transport::BrainTransport};
 
 const ACTIVE_DESIRED_STATE_INTERVAL: Duration = Duration::from_millis(75);
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(10);
@@ -25,6 +24,7 @@ const MIN_LINK_TIMEOUT: Duration = Duration::from_millis(250);
 
 /// Result of handling a single operator command.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[allow(dead_code)]
 pub enum BrainStep {
     Continue(Option<Telemetry>),
     Exit,
@@ -74,7 +74,7 @@ impl RobotBrain {
     ) -> Self {
         let now = Instant::now();
         let desired_mode = router.default_mode;
-        let desired_servo = router.centered_servo();
+        let desired_servo = RouterPolicy::centered_servo();
         let reconnect_interval = Duration::from_millis(session.reconnect_interval_ms.max(1));
         let (chat_event_tx, chat_event_rx) = mpsc::unbounded_channel();
         Self {
@@ -204,9 +204,7 @@ impl RobotBrain {
                 .last_desired_state_at
                 .map(|last| last.elapsed() >= self.desired_state_sync_interval())
                 .unwrap_or(true);
-            if should_refresh
-                && let Err(error) = self.exchange_desired_state(output).await
-            {
+            if should_refresh && let Err(error) = self.exchange_desired_state(output).await {
                 self.handle_transport_failure(
                     input,
                     output,
@@ -241,11 +239,10 @@ impl RobotBrain {
     pub async fn step(&mut self, command: BrainCommand) -> Result<BrainStep> {
         match command {
             BrainCommand::Quit => Ok(BrainStep::Exit),
-            BrainCommand::Ping => self.exchange(self.router.ping_command()).await,
             BrainCommand::Stop => {
                 self.desired_mode = self.router.default_mode;
                 self.active_control_state = ControlState::default();
-                self.desired_servo = self.router.centered_servo();
+                self.desired_servo = RouterPolicy::centered_servo();
                 self.set_link_timeout_raw(self.desired_state_link_timeout_ms())
                     .await?;
                 Ok(BrainStep::Continue(
@@ -264,7 +261,7 @@ impl RobotBrain {
                     self.desired_servo = target.servo;
                 } else if mode == Mode::Fault {
                     self.active_control_state = ControlState::default();
-                    self.desired_servo = self.router.centered_servo();
+                    self.desired_servo = RouterPolicy::centered_servo();
                 } else if previous_mode == Mode::Autonomous {
                     self.active_control_state = ControlState::default();
                 }
@@ -287,11 +284,6 @@ impl RobotBrain {
                 ))
             }
         }
-    }
-
-    async fn exchange(&mut self, command: Command) -> Result<BrainStep> {
-        let response = self.transport.exchange_command(command).await?;
-        Ok(BrainStep::Continue(response))
     }
 
     async fn query_controller_status<O>(&mut self, output: &mut O) -> Result<()>
@@ -323,7 +315,7 @@ impl RobotBrain {
     fn is_default_desired_state(&self) -> bool {
         self.desired_mode == self.router.default_mode
             && self.active_control_state.drive.is_none()
-            && self.desired_servo == self.router.centered_servo()
+            && self.desired_servo == RouterPolicy::centered_servo()
     }
 
     fn desired_state_sync_interval(&self) -> Duration {
@@ -348,7 +340,7 @@ impl RobotBrain {
 
         let response = self
             .transport
-            .exchange_command(self.router.link_timeout_update(milliseconds))
+            .exchange_command(RouterPolicy::link_timeout_update(milliseconds))
             .await?;
         self.applied_link_timeout_ms = Some(milliseconds);
         self.last_contact_at = Instant::now();
@@ -386,7 +378,7 @@ impl RobotBrain {
             }
             Mode::Teleop => {}
             Mode::Fault => {
-                self.desired_servo = self.router.centered_servo();
+                self.desired_servo = RouterPolicy::centered_servo();
             }
         }
     }
@@ -457,7 +449,7 @@ impl RobotBrain {
 
         if mode == Mode::Fault {
             self.active_control_state = ControlState::default();
-            self.desired_servo = self.router.centered_servo();
+            self.desired_servo = RouterPolicy::centered_servo();
             output.set_control_state(self.active_control_state)?;
         } else if previous_mode == Mode::Autonomous && self.active_control_state.drive.is_some() {
             self.active_control_state = ControlState::default();
@@ -497,7 +489,7 @@ impl RobotBrain {
     {
         self.desired_mode = self.router.default_mode;
         self.active_control_state = ControlState::default();
-        self.desired_servo = self.router.centered_servo();
+        self.desired_servo = RouterPolicy::centered_servo();
         self.last_desired_state_at = None;
         output.set_desired_mode(self.desired_mode)?;
         output.set_control_state(self.active_control_state)?;
@@ -625,18 +617,6 @@ impl RobotBrain {
 
                     match command {
                         BrainCommand::Quit => return Ok(true),
-                        BrainCommand::Ping => match self.step(BrainCommand::Ping).await? {
-                            BrainStep::Continue(Some(telemetry)) => {
-                                self.last_contact_at = Instant::now();
-                                self.refresh_active_control_hold(input)?;
-                                self.handle_telemetry(telemetry, output)?;
-                            }
-                            BrainStep::Continue(None) => {
-                                self.last_contact_at = Instant::now();
-                                self.refresh_active_control_hold(input)?;
-                            }
-                            BrainStep::Exit => return Ok(true),
-                        },
                         BrainCommand::Stop => {
                             self.stop_desired_motion(output).await?;
                             self.refresh_active_control_hold(input)?;
@@ -705,6 +685,7 @@ impl RobotBrain {
         ))?;
         output.set_desired_mode(self.desired_mode)?;
         output.set_control_state(self.active_control_state)?;
+        output.set_distance(None)?;
         output.log(LogLevel::Warn, message)?;
         self.transport.disconnect();
         Ok(())
@@ -714,6 +695,9 @@ impl RobotBrain {
     where
         O: SessionOutput,
     {
+        if let Some(distance) = latest_range_sample(&telemetry) {
+            output.set_distance(Some(distance))?;
+        }
         output.log(
             LogLevel::Info,
             format!("telemetry {}: {telemetry:?}", telemetry.kind()),
@@ -723,13 +707,22 @@ impl RobotBrain {
     }
 }
 
+fn latest_range_sample(telemetry: &Telemetry) -> Option<RangeTelemetry> {
+    match telemetry {
+        Telemetry::Status(status) => status.range,
+        Telemetry::DesiredState(desired_state) => desired_state.range,
+        Telemetry::Range(range) => Some(*range),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
 
     use anyhow::{Result, anyhow};
     use mortimmy_core::{Mode, ServoTicks};
-    use mortimmy_protocol::messages::{commands::ServoCommand, telemetry::Telemetry};
+    use mortimmy_protocol::messages::{commands::ServoCommand, telemetry::{RangeTelemetry, Telemetry}};
     use tokio::time::Instant;
 
     use super::COMMAND_COMPLETION_HOLD_GRACE;
@@ -737,11 +730,11 @@ mod tests {
     use crate::{
         brain::{
             BrainCommand, BrainStep, RobotBrain,
+            command_mapping::RouterPolicy,
             transport::{BrainTransport, TransportBackendKind},
         },
         config::{LogLevel, SessionConfig},
         input::{CommandInputSource, ControlState, DriveIntent, InputEvent, ScriptedInput},
-        routing::RouterPolicy,
         serial::SerialConfig,
         telemetry::{TelemetryConfig, TelemetryFanout},
         tui::{NullSessionOutput, SessionOutput},
@@ -760,6 +753,7 @@ mod tests {
         connection_status: String,
         control_state: ControlState,
         desired_mode: Mode,
+        distance: Option<RangeTelemetry>,
     }
 
     impl SessionOutput for RecordingOutput {
@@ -782,6 +776,11 @@ mod tests {
             self.desired_mode = mode;
             Ok(())
         }
+
+        fn set_distance(&mut self, distance: Option<RangeTelemetry>) -> Result<()> {
+            self.distance = distance;
+            Ok(())
+        }
     }
 
     impl CommandInputSource for TrackingInput {
@@ -798,26 +797,6 @@ mod tests {
             self.refreshed.push(duration);
             Ok(())
         }
-    }
-
-    #[tokio::test]
-    async fn ping_roundtrips_over_loopback_transport() {
-        let mut brain = RobotBrain::new(
-            RouterPolicy::default(),
-            BrainTransport::from_kind(
-                TransportBackendKind::Loopback,
-                SerialConfig::default(),
-                Duration::from_secs(2),
-            )
-            .unwrap(),
-            TelemetryFanout::new(TelemetryConfig::default()),
-            SessionConfig::default(),
-        );
-
-        assert_eq!(
-            brain.step(BrainCommand::Ping).await.unwrap(),
-            BrainStep::Continue(Some(Telemetry::Pong))
-        );
     }
 
     #[tokio::test]
@@ -878,6 +857,40 @@ mod tests {
             }
             other => panic!("unexpected brain step: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn handle_telemetry_updates_distance_from_latest_range_sample() {
+        let mut brain = RobotBrain::new(
+            RouterPolicy::default(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
+            TelemetryFanout::new(TelemetryConfig::default()),
+            SessionConfig::default(),
+        );
+        let mut output = RecordingOutput::default();
+
+        brain
+            .handle_telemetry(
+                Telemetry::Range(RangeTelemetry {
+                    distance_mm: mortimmy_core::Millimeters(412),
+                    quality: 100,
+                }),
+                &mut output,
+            )
+            .unwrap();
+
+        assert_eq!(
+            output.distance,
+            Some(RangeTelemetry {
+                distance_mm: mortimmy_core::Millimeters(412),
+                quality: 100,
+            })
+        );
     }
 
     #[tokio::test]
@@ -980,7 +993,7 @@ mod tests {
             SessionConfig::default(),
         );
         let mut input = ScriptedInput::new([
-            InputEvent::Command(BrainCommand::Ping),
+            InputEvent::Command(BrainCommand::Stop),
             InputEvent::Control(ControlState {
                 drive: Some(DriveIntent {
                     forward: DriveIntent::AXIS_MAX,
@@ -1103,7 +1116,7 @@ mod tests {
             .handle_input_events(
                 &mut input,
                 &mut output,
-                vec![InputEvent::Command(BrainCommand::Ping)],
+                vec![InputEvent::Command(BrainCommand::Stop)],
             )
             .await
             .unwrap();
@@ -1198,7 +1211,7 @@ mod tests {
         let mut input = TrackingInput {
             pending_events: std::collections::VecDeque::from([
                 InputEvent::Command(BrainCommand::Quit),
-                InputEvent::Command(BrainCommand::Ping),
+                InputEvent::Command(BrainCommand::Stop),
             ]),
             ..TrackingInput::default()
         };
@@ -1213,7 +1226,7 @@ mod tests {
         );
         assert_eq!(events.len(), 2);
         assert_eq!(events[0], InputEvent::Command(BrainCommand::Quit));
-        assert_eq!(events[1], InputEvent::Command(BrainCommand::Ping));
+        assert_eq!(events[1], InputEvent::Command(BrainCommand::Stop));
     }
 
     #[tokio::test]

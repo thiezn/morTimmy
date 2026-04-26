@@ -40,9 +40,8 @@ mod tests {
         WireMessage,
         command::Command,
         commands::{
-            AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding,
-            DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
-            TrellisLedCommand,
+            AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding, DesiredStateCommand,
+            DriveCommand, ParameterKey, ParameterUpdate, ServoCommand, TrellisLedCommand,
         },
         telemetry::{
             AudioStatusTelemetry, DesiredStateTelemetry, MotorStateTelemetry, PadEventKind,
@@ -135,6 +134,7 @@ mod tests {
                     pan: ServoTicks(1_540),
                     tilt: ServoTicks(1_220),
                 },
+                None,
                 None,
             )));
 

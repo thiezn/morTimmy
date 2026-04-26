@@ -41,15 +41,6 @@ pub fn suggestions(input: &str, cursor: usize, files: &FileIndex) -> Vec<Suggest
         match command_name.as_str() {
             "help" => return command_name_suggestions(token, start, end),
             "mode" => return fixed_value_suggestions(commands::mode_names(), token, start, end, "mode value"),
-            "drive" => {
-                return fixed_value_suggestions(
-                    commands::drive_keywords(),
-                    token,
-                    start,
-                    end,
-                    "drive shortcut",
-                )
-            }
             _ => {}
         }
     }
@@ -129,7 +120,7 @@ fn command_name_should_append_space(command_name: &str) -> bool {
 }
 
 fn fixed_value_should_append_space(value: &str) -> bool {
-    !matches!(value, "teleop" | "autonomous" | "fault" | "stop")
+    !matches!(value, "teleop" | "autonomous" | "fault")
 }
 
 fn token_bounds(input: &str, cursor: usize) -> (usize, usize) {
@@ -170,7 +161,7 @@ mod tests {
     }
 
     #[test]
-    fn suggests_help_topics_mode_values_and_drive_keywords() {
+    fn suggests_help_topics_and_mode_values() {
         let file_index = FileIndex::default();
 
         let help_suggestions = suggestions("/help mo", 8, &file_index);
@@ -178,9 +169,6 @@ mod tests {
 
         let mode_suggestions = suggestions("/mode au", 8, &file_index);
         assert!(mode_suggestions.iter().any(|suggestion| suggestion.label == "autonomous"));
-
-        let drive_suggestions = suggestions("/drive ri", 9, &file_index);
-        assert!(drive_suggestions.iter().any(|suggestion| suggestion.label == "right"));
     }
 
     #[test]
@@ -217,14 +205,14 @@ mod tests {
         assert_eq!(input, "/mode autonomous");
         assert_eq!(cursor, input.len());
 
-        let drive_value_suggestion = suggestions("/drive fo", 9, &file_index)
+        let drive_command_suggestion = suggestions("/dr", 3, &file_index)
             .into_iter()
-            .find(|suggestion| suggestion.label == "forward")
+            .find(|suggestion| suggestion.label == "/drive")
             .unwrap();
-        let mut input = "/drive fo".to_string();
+        let mut input = "/dr".to_string();
         let mut cursor = input.len();
-        apply_suggestion(&mut input, &mut cursor, &drive_value_suggestion);
-        assert_eq!(input, "/drive forward ");
+        apply_suggestion(&mut input, &mut cursor, &drive_command_suggestion);
+        assert_eq!(input, "/drive ");
         assert_eq!(cursor, input.len());
     }
 

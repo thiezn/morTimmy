@@ -5,11 +5,15 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
+use mortimmy_protocol::messages::telemetry::RangeTelemetry;
 
 use crate::config::LogLevel;
 use crate::input::ControlState;
 
-use super::{commands, model::{Model, UiLogEntry}};
+use super::{
+    commands,
+    model::{InputMode, KeyboardDriveStyle, Model, UiLogEntry},
+};
 
 const COPY_ALL_LABEL: &str = "[Copy All]";
 const COPY_LAST_LABEL: &str = "[Copy Last]";
@@ -66,6 +70,7 @@ fn render_summary(model: &Model, frame: &mut Frame, area: Rect, theme: Theme) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
         .split(area);
+    let (distance_label, distance_style) = describe_distance(theme, model.summary.distance);
 
     let left = vec![
         key_value_line(theme, "Config", &model.summary.config_path, theme.accent),
@@ -116,6 +121,7 @@ fn render_summary(model: &Model, frame: &mut Frame, area: Rect, theme: Theme) {
                 theme.success
             },
         ),
+        key_value_line(theme, "Distance", &distance_label, distance_style),
         key_value_line(
             theme,
             "Controllers",
@@ -229,32 +235,47 @@ fn render_completions(model: &Model, frame: &mut Frame, area: Rect, theme: Theme
 }
 
 fn render_input(model: &Model, frame: &mut Frame, area: Rect, theme: Theme) {
-    let title = if model.command_input.is_empty() {
-        "Command (/help, Tab for autocomplete)"
-    } else {
-        "Command"
-    };
-    let content = if model.command_input.is_empty() {
-        Line::from(vec![
-            Span::styled("> ", theme.accent),
-            Span::styled(
-                "Type chat text directly, or use /help, /mode teleop, or @file completion",
-                theme.placeholder,
-            ),
-        ])
-    } else {
-        Line::from(vec![
-            Span::styled("> ", theme.accent),
-            Span::raw(model.command_input.as_str()),
-        ])
+    let (title, content, show_cursor) = match model.input_mode {
+        InputMode::Command => {
+            let title = if model.command_input.is_empty() {
+                "Command (/help, /drive, Tab for autocomplete)"
+            } else {
+                "Command"
+            };
+            let content = if model.command_input.is_empty() {
+                Line::from(vec![
+                    Span::styled("> ", theme.accent),
+                    Span::styled(
+                        "Type chat text directly, or use /help, /drive, /mode teleop, or @file completion",
+                        theme.placeholder,
+                    ),
+                ])
+            } else {
+                Line::from(vec![
+                    Span::styled("> ", theme.accent),
+                    Span::raw(model.command_input.as_str()),
+                ])
+            };
+            (title, content, true)
+        }
+        InputMode::KeyboardDrive(state) => (
+            keyboard_drive_title(state.style),
+            Line::from(vec![
+                Span::styled("> ", theme.accent),
+                Span::styled(keyboard_drive_hint(state.style), theme.placeholder),
+            ]),
+            false,
+        ),
     };
     let input = Paragraph::new(content)
         .block(panel_block(title, theme.border_emphasis, theme.title));
     frame.render_widget(input, area);
 
-    let cursor_x = area.x + 3 + model.cursor.min(area.width.saturating_sub(4) as usize) as u16;
-    let cursor_y = area.y + 1;
-    frame.set_cursor_position((cursor_x, cursor_y));
+    if show_cursor {
+        let cursor_x = area.x + 3 + model.cursor.min(area.width.saturating_sub(4) as usize) as u16;
+        let cursor_y = area.y + 1;
+        frame.set_cursor_position((cursor_x, cursor_y));
+    }
 }
 
 fn render_help_popup(model: &Model, frame: &mut Frame, theme: Theme) {
@@ -324,6 +345,30 @@ fn describe_control_state(control_state: ControlState) -> String {
             drive.forward, drive.turn, drive.speed
         ),
         None => "stopped".to_string(),
+    }
+}
+
+fn describe_distance(theme: Theme, distance: Option<RangeTelemetry>) -> (String, Style) {
+    match distance {
+        Some(distance) if distance.quality == 0 => {
+            (format!("{} mm (out of range)", distance.distance_mm.0), theme.warning)
+        }
+        Some(distance) => (format!("{} mm", distance.distance_mm.0), theme.success),
+        None => ("awaiting sample".to_string(), theme.muted),
+    }
+}
+
+fn keyboard_drive_title(style: KeyboardDriveStyle) -> &'static str {
+    match style {
+        KeyboardDriveStyle::Arcade => "Keyboard Drive (w,a,s,d; t tank; Space stop; Esc/q exit)",
+        KeyboardDriveStyle::Tank => "Keyboard Drive (tank; t wasd; Space stop; Esc/q exit)",
+    }
+}
+
+fn keyboard_drive_hint(style: KeyboardDriveStyle) -> &'static str {
+    match style {
+        KeyboardDriveStyle::Arcade => "w forward, a left, s backward, d right",
+        KeyboardDriveStyle::Tank => "w/s left track, e/d right track",
     }
 }
 

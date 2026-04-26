@@ -7,12 +7,12 @@ fn live_hardware_config_is_optional() {
 
 #[test]
 #[ignore = "requires live connected hardware and firmware support"]
-fn usb_link_ping_pong_smoke() {
+fn usb_link_status_smoke() {
     let Some(_config) = load_hardware_test_config().unwrap() else {
         return;
     };
 
-    // Future work: open the configured serial device, send Ping, and assert Pong.
+    // Future work: open the configured serial device, request status, and assert status telemetry.
 }
 
 #[test]

@@ -1,18 +1,14 @@
-use anyhow::{Context, anyhow, bail};
-use mortimmy_protocol::messages::{
-    command::Command as ProtocolCommand,
-    telemetry::Telemetry,
-};
+use anyhow::Context;
+use cli_helpers::setup_tracing_from_level;
 use tokio::time::Duration;
 
 use crate::{
     audio::AudioSubsystem,
-    brain::{RobotBrain, transport::BrainTransport},
+    brain::{RobotBrain, command_mapping::RouterPolicy, transport::BrainTransport},
     camera::CameraSubsystem,
-    cli::{config::ConfigCommand, ping::PingCommand, start::StartCommand},
+    cli::{config::ConfigCommand, start::StartCommand},
     config::{self, AppConfig, LogLevel},
     input::{ControllerSelection, default_controller_registry},
-    routing::RouterPolicy,
     telemetry::TelemetryFanout,
     tui::{SessionOutput, TuiConfig, new_session},
     websocket::WebsocketServer,
@@ -84,8 +80,7 @@ pub async fn start(command: StartCommand) -> anyhow::Result<()> {
             )?;
             output.set_connection_status(format!(
                 "connecting to {} via {:?}",
-                serial_target,
-                transport_backend,
+                serial_target, transport_backend,
             ))?;
             output.log(
                 LogLevel::Info,
@@ -111,63 +106,12 @@ pub async fn start(command: StartCommand) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn ping(command: PingCommand) -> anyhow::Result<()> {
-    let transport_backend = command.transport_backend;
-    let config_path = config::resolve_config_path(command.config.as_deref())?;
-    let file_config = config::load_or_create(&config_path)?;
-    let runtime_config = command.merge_config(file_config);
-    let device_paths = runtime_config.serial.display_paths();
-
-    let mut transport = BrainTransport::from_kind(
-        transport_backend,
-        runtime_config.serial.clone(),
-        Duration::from_millis(runtime_config.session.response_timeout_ms.max(1)),
-    )?;
-
-    transport.try_connect().await.map_err(|error| {
-        anyhow!(
-            "pico ping failed while connecting to {} via {:?}: {error:#}",
-            device_paths,
-            transport_backend,
-        )
-    })?;
-
-    match transport.exchange_command(ProtocolCommand::Ping).await.map_err(|error| {
-        anyhow!(
-            "pico ping failed after connecting to {} via {:?}: {error:#}",
-            device_paths,
-            transport_backend,
-        )
-    })? {
-        Some(Telemetry::Pong) => {
-            let controllers = transport.connected_controllers();
-
-            if controllers.is_empty() {
-                bail!("missing status telemetry after ping")
-            }
-
-            for controller in controllers {
-                println!(
-                    "pong device={} transport={transport_backend:?} role={:?} capabilities=0x{:08x}",
-                    controller.device_path,
-                    controller.status.controller_role,
-                    controller.status.capabilities.bits(),
-                );
-            }
-
-            Ok(())
-        }
-        Some(telemetry) => bail!("unexpected telemetry after ping: {telemetry:?}"),
-        None => bail!("missing telemetry after ping"),
-    }
-}
-
 pub fn configure(command: ConfigCommand) -> anyhow::Result<()> {
     let config_path = config::resolve_config_path(command.config.as_deref())?;
     let mut app_config = config::load(&config_path)?;
     command.apply_to(&mut app_config);
 
-    setup_tracing(app_config.logging.level, app_config.logging.no_color);
+    setup_tracing_from_level(app_config.logging.level, app_config.logging.no_color);
 
     config::save(&app_config, &config_path)?;
     tracing::info!(config_path = %config_path.display(), "config file updated");
@@ -185,19 +129,4 @@ fn print_config(app_config: &AppConfig) -> anyhow::Result<()> {
     let rendered = toml::to_string_pretty(app_config).context("failed to serialize config")?;
     println!("{rendered}");
     Ok(())
-}
-
-fn setup_tracing(level: LogLevel, no_color: bool) {
-    let filter = if std::env::var("RUST_LOG").is_ok() {
-        tracing_subscriber::EnvFilter::from_default_env()
-    } else {
-        tracing_subscriber::EnvFilter::new(level.as_str())
-    };
-
-    tracing_subscriber::fmt()
-        .without_time()
-        .with_target(false)
-        .with_ansi(!no_color)
-        .with_env_filter(filter)
-        .init();
 }

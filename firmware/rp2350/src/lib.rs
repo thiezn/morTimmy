@@ -250,7 +250,6 @@ impl FirmwareScaffold {
                 None
             }
             Command::GetStatus => Some(Telemetry::Status(self.status_telemetry())),
-            Command::Ping => Some(Telemetry::Pong),
         };
 
         if let Some(telemetry) = response.as_ref() {
@@ -279,6 +278,7 @@ impl FirmwareScaffold {
             uptime_ms: 0,
             link_quality: DEFAULT_LINK_QUALITY,
             error: self.control.last_error,
+            range: self.sensors.ultrasonic.last_sample,
         }
     }
 
@@ -289,6 +289,7 @@ impl FirmwareScaffold {
             self.control.drive.telemetry(),
             self.control.servo.telemetry(),
             self.control.last_error,
+            self.sensors.ultrasonic.last_sample,
         )
     }
 
@@ -456,6 +457,7 @@ pub fn run_host_stub() {
 #[cfg(test)]
 mod tests {
     use heapless::Vec;
+    use mortimmy_core::Millimeters;
     use mortimmy_drivers::{PadEvent, PadEventKind as DriverPadEventKind, PadIndex};
     use mortimmy_protocol::messages::{
         WireMessage,
@@ -613,6 +615,27 @@ mod tests {
     }
 
     #[test]
+    fn status_and_desired_state_telemetry_include_latest_range_sample() {
+        let mut scaffold = FirmwareScaffold::default();
+        scaffold.record_range_measurement(Millimeters(287), 100);
+
+        assert_eq!(
+            scaffold.status_telemetry().range,
+            Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
+                distance_mm: Millimeters(287),
+                quality: 100,
+            })
+        );
+        assert_eq!(
+            scaffold.desired_state_telemetry().range,
+            Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
+                distance_mm: Millimeters(287),
+                quality: 100,
+            })
+        );
+    }
+
+    #[test]
     fn enter_fault_state_clears_control_audio_and_trellis() {
         let mut scaffold = FirmwareScaffold::default();
         scaffold.handle_command(Command::SetDesiredState(DesiredStateCommand::new(
@@ -705,12 +728,17 @@ mod tests {
     }
 
     #[test]
-    fn wire_message_command_roundtrips_to_telemetry_response() {
+    fn wire_message_status_command_roundtrips_to_status_response() {
         let mut scaffold = FirmwareScaffold::default();
 
-        let response = scaffold.apply_wire_message(WireMessage::Command(Command::Ping));
+        let response = scaffold.apply_wire_message(WireMessage::Command(Command::GetStatus));
 
-        assert_eq!(response, Some(WireMessage::Telemetry(Telemetry::Pong)));
+        assert_eq!(
+            response,
+            Some(WireMessage::Telemetry(Telemetry::Status(
+                scaffold.status_telemetry()
+            )))
+        );
     }
 
     #[test]

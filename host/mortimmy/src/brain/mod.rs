@@ -2,9 +2,10 @@
 
 mod autonomy;
 pub mod command;
+pub mod command_mapping;
 mod robot;
 pub mod transport;
-
 pub use self::command::BrainCommand;
+
 #[allow(unused_imports)]
 pub use self::robot::{BrainStep, RobotBrain};

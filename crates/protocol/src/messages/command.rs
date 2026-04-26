@@ -13,7 +13,6 @@ pub enum Command {
     PlayAudio(AudioChunkCommand),
     SetTrellisLeds(TrellisLedCommand),
     GetStatus,
-    Ping,
 }
 
 impl Command {
@@ -25,7 +24,6 @@ impl Command {
             Self::PlayAudio(_) => "play-audio",
             Self::SetTrellisLeds(_) => "set-trellis-leds",
             Self::GetStatus => "get-status",
-            Self::Ping => "ping",
         }
     }
 }

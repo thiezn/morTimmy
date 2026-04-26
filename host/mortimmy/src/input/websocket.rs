@@ -41,8 +41,9 @@ struct WebsocketRuntime {
 
 impl WebsocketRuntime {
     fn start(bind_address: &str) -> Result<Self> {
-        let listener = TcpListener::bind(bind_address)
-            .with_context(|| format!("failed to bind websocket controller server to {bind_address}"))?;
+        let listener = TcpListener::bind(bind_address).with_context(|| {
+            format!("failed to bind websocket controller server to {bind_address}")
+        })?;
         listener
             .set_nonblocking(true)
             .context("failed to configure websocket controller listener as non-blocking")?;
@@ -89,8 +90,13 @@ impl Drop for WebsocketRuntime {
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 enum WebsocketClientMessage {
-    Control { #[serde(default)] drive: Option<WebsocketDriveMessage> },
-    Command { command: WebsocketCommandMessage },
+    Control {
+        #[serde(default)]
+        drive: Option<WebsocketDriveMessage>,
+    },
+    Command {
+        command: WebsocketCommandMessage,
+    },
 }
 
 #[derive(Debug, Deserialize)]
@@ -105,7 +111,6 @@ struct WebsocketDriveMessage {
 #[serde(rename_all = "kebab-case")]
 enum WebsocketCommandMessage {
     Quit,
-    Ping,
     Stop,
     Teleop,
     Autonomous,
@@ -142,7 +147,8 @@ impl WebsocketControllerInput {
     fn handle_runtime_event(&mut self, event: WebsocketRuntimeEvent) {
         match event {
             WebsocketRuntimeEvent::Connected(info) => {
-                self.tracked_controllers.insert(info.id.clone(), info.clone());
+                self.tracked_controllers
+                    .insert(info.id.clone(), info.clone());
                 if !self.suspended {
                     self.pending_lifecycle
                         .push_back(ControllerLifecycleEvent::Connected(info));
@@ -315,7 +321,10 @@ fn run_client_connection(
     };
 
     let controller = ControllerInfo::new(
-        ControllerId::new(ControllerKind::Websocket, format!("client-{connection_index}")),
+        ControllerId::new(
+            ControllerKind::Websocket,
+            format!("client-{connection_index}"),
+        ),
         format!("Websocket {remote_addr} via {bind_address}"),
     );
 
@@ -444,7 +453,6 @@ impl WebsocketCommandMessage {
     fn into_brain_command(self) -> BrainCommand {
         match self {
             Self::Quit => BrainCommand::Quit,
-            Self::Ping => BrainCommand::Ping,
             Self::Stop => BrainCommand::Stop,
             Self::Teleop => BrainCommand::SetMode(Mode::Teleop),
             Self::Autonomous => BrainCommand::SetMode(Mode::Autonomous),
@@ -487,12 +495,14 @@ mod tests {
 
     #[test]
     fn parses_command_messages_into_brain_commands() {
-        let events = parse_websocket_message(r#"{"type":"command","command":"autonomous"}"#)
-            .unwrap();
+        let events =
+            parse_websocket_message(r#"{"type":"command","command":"autonomous"}"#).unwrap();
 
         assert_eq!(
             events,
-            vec![RoutedInputEvent::Command(BrainCommand::SetMode(Mode::Autonomous))]
+            vec![RoutedInputEvent::Command(BrainCommand::SetMode(
+                Mode::Autonomous
+            ))]
         );
     }
 
@@ -517,8 +527,7 @@ mod tests {
 
         client
             .send(Message::Text(
-                r#"{"type":"control","drive":{"forward":1.0,"turn":-0.5,"speed":600}}"#
-                    .into(),
+                r#"{"type":"control","drive":{"forward":1.0,"turn":-0.5,"speed":600}}"#.into(),
             ))
             .unwrap();
 

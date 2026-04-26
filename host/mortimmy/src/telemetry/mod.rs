@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use mortimmy_protocol::messages::telemetry::Telemetry;
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +19,9 @@ impl Default for TelemetryConfig {
 
 #[derive(Clone, Debug)]
 pub struct TelemetryFanout {
+    #[allow(dead_code)]
     pub config: TelemetryConfig,
+
     pub subscribers: usize,
 }
 

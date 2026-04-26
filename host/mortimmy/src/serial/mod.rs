@@ -194,6 +194,7 @@ mod tests {
             uptime_ms: 42,
             link_quality: 100,
             error: None,
+            range: None,
         }));
         let mut payload_buffer = [0u8; mortimmy_protocol::MAX_PAYLOAD_LEN];
         let payload = mortimmy_protocol::encode_message(&message, &mut payload_buffer).unwrap();

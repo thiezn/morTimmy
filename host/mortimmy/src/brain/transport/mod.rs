@@ -26,6 +26,9 @@ pub struct ConnectedController {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum TransportBackendKind {
     /// Exchange framed protocol packets with an in-process firmware scaffold.
+    ///
+    /// Useful for development and testing without a physical robot, but does
+    /// not simulate any real-world conditions.
     Loopback,
     /// Exchange framed protocol packets with a live Pico USB CDC serial device.
     #[default]
@@ -41,12 +44,18 @@ pub enum BrainTransport {
 
 impl BrainTransport {
     /// Construct a transport backend from CLI selection and serial configuration.
-    pub fn from_kind(kind: TransportBackendKind, serial_config: SerialConfig, response_timeout: Duration) -> Result<Self> {
+    pub fn from_kind(
+        kind: TransportBackendKind,
+        serial_config: SerialConfig,
+        response_timeout: Duration,
+    ) -> Result<Self> {
         match kind {
-            TransportBackendKind::Loopback => Ok(Self::Loopback(Box::new(LoopbackPicoTransport::new(serial_config)))),
-            TransportBackendKind::Serial => {
-                Ok(Self::Serial(Box::new(ManagedSerialPicoTransport::new(serial_config, response_timeout))))
-            }
+            TransportBackendKind::Loopback => Ok(Self::Loopback(Box::new(
+                LoopbackPicoTransport::new(serial_config),
+            ))),
+            TransportBackendKind::Serial => Ok(Self::Serial(Box::new(
+                ManagedSerialPicoTransport::new(serial_config, response_timeout),
+            ))),
         }
     }
 

@@ -246,7 +246,7 @@ fn controller_accepts_command(status: StatusTelemetry, command: &Command) -> boo
         },
         Command::PlayAudio(_) => status.capabilities.contains(ControllerCapabilities::AUDIO_OUTPUT),
         Command::SetTrellisLeds(_) => status.capabilities.contains(ControllerCapabilities::TEXT_DISPLAY),
-        Command::GetStatus | Command::Ping => true,
+        Command::GetStatus => true,
     }
 }
 
@@ -360,6 +360,7 @@ mod tests {
                 uptime_ms: 0,
                 link_quality: 100,
                 error: None,
+                range: None,
             },
         }
     }

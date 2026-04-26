@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand};
 
-use crate::cli::{config::ConfigCommand, ping::PingCommand, start::StartCommand};
+use crate::cli::{config::ConfigCommand, start::StartCommand};
 
 #[derive(Debug, Parser)]
 #[command(name = "mortimmy-pi-daemon", about = "Host bridge scaffold for the mortimmy robot")]
@@ -17,7 +17,6 @@ impl Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    Ping(PingCommand),
     Start(StartCommand),
     Config(ConfigCommand),
 }

@@ -1,17 +1,17 @@
 use core::fmt;
 
-use mortimmy_core::{CoreError, Mode};
 #[cfg(not(feature = "capability-drive"))]
 use mortimmy_core::PwmTicks;
 #[cfg(not(feature = "capability-servo"))]
 use mortimmy_core::ServoTicks;
+use mortimmy_core::{CoreError, Mode};
 use serde::{
     Deserialize, Deserializer, Serialize, Serializer,
     de::{self, SeqAccess, Visitor},
     ser::SerializeTuple,
 };
 
-use super::{drive::MotorStateTelemetry, servo::ServoStateTelemetry};
+use super::{RangeTelemetry, drive::MotorStateTelemetry, servo::ServoStateTelemetry};
 
 #[cfg(not(feature = "capability-drive"))]
 const fn default_drive_telemetry() -> MotorStateTelemetry {
@@ -39,6 +39,7 @@ pub struct DesiredStateTelemetry {
     #[cfg(feature = "capability-servo")]
     pub servo: ServoStateTelemetry,
     pub error: Option<CoreError>,
+    pub range: Option<RangeTelemetry>,
 }
 
 impl DesiredStateTelemetry {
@@ -47,6 +48,7 @@ impl DesiredStateTelemetry {
         drive: MotorStateTelemetry,
         servo: ServoStateTelemetry,
         error: Option<CoreError>,
+        range: Option<RangeTelemetry>,
     ) -> Self {
         let _ = drive;
         let _ = servo;
@@ -58,6 +60,7 @@ impl DesiredStateTelemetry {
             #[cfg(feature = "capability-servo")]
             servo,
             error,
+            range,
         }
     }
 
@@ -89,11 +92,12 @@ impl Serialize for DesiredStateTelemetry {
     where
         S: Serializer,
     {
-        let mut tuple = serializer.serialize_tuple(4)?;
+        let mut tuple = serializer.serialize_tuple(5)?;
         tuple.serialize_element(&self.mode)?;
         tuple.serialize_element(&self.drive())?;
         tuple.serialize_element(&self.servo())?;
         tuple.serialize_element(&self.error)?;
+        tuple.serialize_element(&self.range)?;
         tuple.end()
     }
 }
@@ -103,7 +107,7 @@ impl<'de> Deserialize<'de> for DesiredStateTelemetry {
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_tuple(4, DesiredStateTelemetryVisitor)
+        deserializer.deserialize_tuple(5, DesiredStateTelemetryVisitor)
     }
 }
 
@@ -132,8 +136,11 @@ impl<'de> Visitor<'de> for DesiredStateTelemetryVisitor {
         let error = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
+        let range = seq
+            .next_element()?
+            .ok_or_else(|| de::Error::invalid_length(4, &self))?;
 
-        Ok(DesiredStateTelemetry::new(mode, drive, servo, error))
+        Ok(DesiredStateTelemetry::new(mode, drive, servo, error, range))
     }
 }
 
@@ -160,7 +167,7 @@ mod tests {
             pan: ServoTicks(24),
             tilt: ServoTicks(36),
         };
-        let telemetry = DesiredStateTelemetry::new(Mode::Teleop, drive, servo, None);
+        let telemetry = DesiredStateTelemetry::new(Mode::Teleop, drive, servo, None, None);
 
         #[cfg(feature = "capability-drive")]
         assert_eq!(telemetry.drive(), drive);
@@ -171,5 +178,7 @@ mod tests {
         assert_eq!(telemetry.servo(), servo);
         #[cfg(not(feature = "capability-servo"))]
         assert_eq!(telemetry.servo(), default_servo_telemetry());
+
+        assert_eq!(telemetry.range, None);
     }
 }

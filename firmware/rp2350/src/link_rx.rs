@@ -27,7 +27,7 @@ impl LinkRxTask {
             }
             Command::PlayAudio(chunk) => self.last_audio_chunk_index = Some(chunk.chunk_index),
             Command::SetTrellisLeds(command) => self.last_trellis_led_mask = Some(command.led_mask),
-            Command::SetParam(_) | Command::GetStatus | Command::Ping => {}
+            Command::SetParam(_) | Command::GetStatus => {}
         }
     }
 }

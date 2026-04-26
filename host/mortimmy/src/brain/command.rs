@@ -4,7 +4,6 @@ use mortimmy_core::Mode;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum BrainCommand {
     Quit,
-    Ping,
     Stop,
     SetMode(Mode),
     Chat(String),

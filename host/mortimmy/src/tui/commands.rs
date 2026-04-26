@@ -1,14 +1,9 @@
 use anyhow::{Result, bail};
 use mortimmy_core::Mode;
 
-use crate::{
-    brain::BrainCommand,
-    input::{ControlState, DriveIntent, InputEvent},
-};
+use crate::{brain::BrainCommand, input::InputEvent};
 
 use super::files::FileIndex;
-
-const DEFAULT_DRIVE_SPEED: u16 = 300;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct CommandSpec {
@@ -36,15 +31,6 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
         details: &[
             "Exit the mortimmy TUI and stop the brain loop.",
             "Keyboard shortcut: Ctrl+X or Ctrl+C.",
-        ],
-    },
-    CommandSpec {
-        name: "ping",
-        usage: "/ping",
-        summary: "Send a ping and wait for pong telemetry.",
-        details: &[
-            "Send a ping to the transport and wait for the matching pong telemetry.",
-            "Useful when checking whether the controller link is alive.",
         ],
     },
     CommandSpec {
@@ -79,12 +65,13 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
     },
     CommandSpec {
         name: "drive",
-        usage: "/drive <forward|backward|left|right|stop|<forward> <turn> [speed]>",
-        summary: "Set local teleop drive intent with direction keywords or raw axes.",
+        usage: "/drive",
+        summary: "Enter modal keyboard drive control.",
         details: &[
-            "Directional shortcuts: `forward`, `backward`, `left`, `right`, `stop`.",
-            "Raw axis form: `/drive <forward> <turn> [speed]` where forward and turn are between -32767 and 32767.",
-            "Examples: `/drive forward`, `/drive right 450`, `/drive 12000 -8000 300`.",
+            "Switch the TUI into keyboard drive mode.",
+            "In `w,a,s,d` mode: `w` forward, `a` left, `s` backward, `d` right.",
+            "Press `t` to toggle tank mode, where `w/s` drive the left track and `e/d` drive the right track.",
+            "Press `Space` to stop, and `Esc` or `q` to return to normal command entry.",
         ],
     },
     CommandSpec {
@@ -103,6 +90,7 @@ pub const COMMAND_SPECS: &[CommandSpec] = &[
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalCommand {
     Help(Option<String>),
+    EnterKeyboardDrive,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -129,7 +117,6 @@ pub fn parse(input: &str, files: &FileIndex) -> Result<CommandAction> {
     match command_name.to_ascii_lowercase().as_str() {
         "help" => parse_help(rest),
         "quit" => Ok(CommandAction::Emit(InputEvent::Command(BrainCommand::Quit))),
-        "ping" => Ok(CommandAction::Emit(InputEvent::Command(BrainCommand::Ping))),
         "stop" => Ok(CommandAction::Emit(InputEvent::Command(BrainCommand::Stop))),
         "mode" => parse_mode(rest),
         "servo" => parse_servo(rest),
@@ -154,8 +141,11 @@ pub fn help_text(topic: Option<&str>) -> String {
     lines.push("Notes:".to_string());
     lines.push("  Commands must start with /.".to_string());
     lines.push("  Bare input is treated as /chat <prompt>.".to_string());
+    lines.push("  Use /drive to enter modal keyboard driving; press Esc or q to return.".to_string());
     lines.push("  Use @filename inside /chat to inline file contents into the prompt.".to_string());
-    lines.push("  Press Tab to autocomplete commands, subcommands, and @file references.".to_string());
+    lines.push(
+        "  Press Tab to autocomplete commands, subcommands, and @file references.".to_string(),
+    );
     lines.push("  Use /help <command> for detailed help on one command.".to_string());
     lines.join("\n")
 }
@@ -168,10 +158,6 @@ pub fn command_spec(name: &str) -> Option<&'static CommandSpec> {
 
 pub fn mode_names() -> &'static [&'static str] {
     &["teleop", "autonomous", "fault"]
-}
-
-pub fn drive_keywords() -> &'static [&'static str] {
-    &["forward", "backward", "left", "right", "stop"]
 }
 
 fn parse_help(rest: &str) -> Result<CommandAction> {
@@ -188,7 +174,9 @@ fn parse_help(rest: &str) -> Result<CommandAction> {
 
     let spec = command_spec(topic)
         .ok_or_else(|| anyhow::anyhow!("unknown command `{topic}`; try /help"))?;
-    Ok(CommandAction::Local(LocalCommand::Help(Some(spec.name.to_string()))))
+    Ok(CommandAction::Local(LocalCommand::Help(Some(
+        spec.name.to_string(),
+    ))))
 }
 
 fn parse_mode(rest: &str) -> Result<CommandAction> {
@@ -199,7 +187,9 @@ fn parse_mode(rest: &str) -> Result<CommandAction> {
         _ => bail!("usage: /mode <teleop|autonomous|fault>"),
     };
 
-    Ok(CommandAction::Emit(InputEvent::Command(BrainCommand::SetMode(mode))))
+    Ok(CommandAction::Emit(InputEvent::Command(
+        BrainCommand::SetMode(mode),
+    )))
 }
 
 fn parse_servo(rest: &str) -> Result<CommandAction> {
@@ -216,42 +206,17 @@ fn parse_servo(rest: &str) -> Result<CommandAction> {
         bail!("usage: /servo <pan> <tilt>");
     }
 
-    Ok(CommandAction::Emit(InputEvent::Command(BrainCommand::Servo {
-        pan,
-        tilt,
-    })))
+    Ok(CommandAction::Emit(InputEvent::Command(
+        BrainCommand::Servo { pan, tilt },
+    )))
 }
 
 fn parse_drive(rest: &str) -> Result<CommandAction> {
-    let parts: Vec<_> = rest.split_whitespace().collect();
-    if parts.is_empty() {
-        bail!("usage: /drive <forward|backward|left|right|stop|<forward> <turn> [speed]>");
+    if !rest.trim().is_empty() {
+        bail!("usage: /drive");
     }
 
-    let control = match parts.as_slice() {
-        ["stop"] => ControlState::default(),
-        ["forward"] => directional_drive(DriveIntent::AXIS_MAX, 0, DEFAULT_DRIVE_SPEED),
-        ["backward"] => directional_drive(-DriveIntent::AXIS_MAX, 0, DEFAULT_DRIVE_SPEED),
-        ["left"] => directional_drive(0, -DriveIntent::AXIS_MAX, DEFAULT_DRIVE_SPEED),
-        ["right"] => directional_drive(0, DriveIntent::AXIS_MAX, DEFAULT_DRIVE_SPEED),
-        [direction, speed] if *direction == "forward" => {
-            directional_drive(DriveIntent::AXIS_MAX, 0, speed.parse()?)
-        }
-        [direction, speed] if *direction == "backward" => {
-            directional_drive(-DriveIntent::AXIS_MAX, 0, speed.parse()?)
-        }
-        [direction, speed] if *direction == "left" => {
-            directional_drive(0, -DriveIntent::AXIS_MAX, speed.parse()?)
-        }
-        [direction, speed] if *direction == "right" => {
-            directional_drive(0, DriveIntent::AXIS_MAX, speed.parse()?)
-        }
-        [forward, turn] => directional_drive(parse_axis(forward)?, parse_axis(turn)?, DEFAULT_DRIVE_SPEED),
-        [forward, turn, speed] => directional_drive(parse_axis(forward)?, parse_axis(turn)?, speed.parse()?),
-        _ => bail!("usage: /drive <forward|backward|left|right|stop|<forward> <turn> [speed]>"),
-    };
-
-    Ok(CommandAction::Emit(InputEvent::Control(control)))
+    Ok(CommandAction::Local(LocalCommand::EnterKeyboardDrive))
 }
 
 fn parse_chat(rest: &str, files: &FileIndex) -> Result<CommandAction> {
@@ -260,34 +225,9 @@ fn parse_chat(rest: &str, files: &FileIndex) -> Result<CommandAction> {
     }
 
     let expanded = files.expand_references(rest)?;
-    Ok(CommandAction::Emit(InputEvent::Command(BrainCommand::Chat(
-        expanded.text,
-    ))))
-}
-
-fn parse_axis(value: &str) -> Result<i16> {
-    let axis: i16 = value.parse()?;
-    if !(-DriveIntent::AXIS_MAX..=DriveIntent::AXIS_MAX).contains(&axis) {
-        bail!(
-            "drive axis must be between {} and {}",
-            -DriveIntent::AXIS_MAX,
-            DriveIntent::AXIS_MAX
-        );
-    }
-    Ok(axis)
-}
-
-fn directional_drive(forward: i16, turn: i16, speed: u16) -> ControlState {
-    let drive = if forward == 0 && turn == 0 {
-        None
-    } else {
-        Some(DriveIntent {
-            forward,
-            turn,
-            speed,
-        })
-    };
-    ControlState { drive }
+    Ok(CommandAction::Emit(InputEvent::Command(
+        BrainCommand::Chat(expanded.text),
+    )))
 }
 
 fn detailed_help_text(spec: &CommandSpec) -> String {
@@ -301,10 +241,7 @@ fn detailed_help_text(spec: &CommandSpec) -> String {
             lines.push(format!("  {}", detail));
         }
     }
-    lines
-        .into_iter()
-        .collect::<Vec<_>>()
-        .join("\n")
+    lines.into_iter().collect::<Vec<_>>().join("\n")
 }
 
 #[cfg(test)]
@@ -315,11 +252,7 @@ mod tests {
     use mortimmy_core::Mode;
 
     use super::{CommandAction, LocalCommand, help_text, parse};
-    use crate::{
-        brain::BrainCommand,
-        input::{ControlState, DriveIntent, InputEvent},
-        tui::files::FileIndex,
-    };
+    use crate::{brain::BrainCommand, input::InputEvent, tui::files::FileIndex};
 
     fn unique_temp_dir(prefix: &str) -> PathBuf {
         let nanos = SystemTime::now()
@@ -358,18 +291,16 @@ mod tests {
         );
         assert_eq!(
             parse("/servo 12 18", &FileIndex::default()).unwrap(),
-            CommandAction::Emit(InputEvent::Command(BrainCommand::Servo { pan: 12, tilt: 18 }))
-        );
-        assert_eq!(
-            parse("/drive forward 450", &FileIndex::default()).unwrap(),
-            CommandAction::Emit(InputEvent::Control(ControlState {
-                drive: Some(DriveIntent {
-                    forward: DriveIntent::AXIS_MAX,
-                    turn: 0,
-                    speed: 450,
-                }),
+            CommandAction::Emit(InputEvent::Command(BrainCommand::Servo {
+                pan: 12,
+                tilt: 18
             }))
         );
+        assert_eq!(
+            parse("/drive", &FileIndex::default()).unwrap(),
+            CommandAction::Local(LocalCommand::EnterKeyboardDrive)
+        );
+        assert!(parse("/drive forward", &FileIndex::default()).is_err());
     }
 
     #[test]

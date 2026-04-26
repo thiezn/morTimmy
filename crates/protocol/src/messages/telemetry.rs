@@ -31,7 +31,6 @@ pub enum Telemetry {
     Battery(BatteryTelemetry),
     AudioStatus(AudioStatusTelemetry),
     TrellisPad(TrellisPadTelemetry),
-    Pong,
 }
 
 impl Telemetry {
@@ -44,7 +43,6 @@ impl Telemetry {
             Self::Battery(_) => "battery",
             Self::AudioStatus(_) => "audio-status",
             Self::TrellisPad(_) => "trellis-pad",
-            Self::Pong => "pong",
         }
     }
 }
