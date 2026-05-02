@@ -5,7 +5,10 @@ use std::sync::Once;
 use anyhow::Result;
 use crossterm::{
     cursor::{Hide, Show},
-    event::{DisableMouseCapture, EnableMouseCapture},
+    event::{
+        DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags,
+        PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
+    },
     execute,
     terminal::{EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode},
 };
@@ -16,13 +19,25 @@ pub type TuiTerminal = Terminal<CrosstermBackend<Stdout>>;
 pub fn init_terminal() -> Result<TuiTerminal> {
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen, EnableMouseCapture, Hide)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        EnableMouseCapture,
+        PushKeyboardEnhancementFlags(KeyboardEnhancementFlags::REPORT_EVENT_TYPES),
+        Hide
+    )?;
     Ok(Terminal::new(CrosstermBackend::new(stdout))?)
 }
 
 pub fn restore_terminal() -> Result<()> {
     let mut stdout = stdout();
-    execute!(stdout, Show, DisableMouseCapture, LeaveAlternateScreen)?;
+    execute!(
+        stdout,
+        Show,
+        PopKeyboardEnhancementFlags,
+        DisableMouseCapture,
+        LeaveAlternateScreen
+    )?;
     disable_raw_mode()?;
     Ok(())
 }

@@ -3,6 +3,18 @@ use embedded_hal::{
     pwm::SetDutyCycle,
 };
 
+#[cfg(feature = "motor-debug")]
+macro_rules! motor_debug {
+    ($($arg:tt)*) => {
+        defmt::debug!($($arg)*);
+    };
+}
+
+#[cfg(not(feature = "motor-debug"))]
+macro_rules! motor_debug {
+    ($($arg:tt)*) => {};
+}
+
 use super::{MotorChannel, MotorDirection, MotorDriver, MotorPowerCommand, MotorStopMode};
 
 /// Invert a motor channel when the wiring causes the logical forward direction to spin backwards.
@@ -69,6 +81,12 @@ where
         &mut self,
         command: MotorPowerCommand,
     ) -> Result<(), L298nError<PinError, PwmError>> {
+        motor_debug!(
+            "l298n bridge drive: output={} max_output={}",
+            command.output().0,
+            command.max_output()
+        );
+
         if command.is_stop() {
             return self.stop();
         }
@@ -79,34 +97,44 @@ where
 
         match self.effective_direction(command.direction()) {
             MotorDirection::Forward => {
+                motor_debug!("l298n bridge direction: in1=LOW in2=HIGH");
                 self.in1.set_low().map_err(L298nError::Direction)?;
                 self.in2.set_high().map_err(L298nError::Direction)?;
             }
             MotorDirection::Reverse => {
+                motor_debug!("l298n bridge direction: in1=HIGH in2=LOW");
                 self.in1.set_high().map_err(L298nError::Direction)?;
                 self.in2.set_low().map_err(L298nError::Direction)?;
             }
             MotorDirection::Stop => return self.stop(),
         }
 
-        self.enable
-            .set_duty_cycle(command.duty_for(self.enable.max_duty_cycle()))
-            .map_err(L298nError::Enable)
+        let duty = command.duty_for(self.enable.max_duty_cycle());
+        motor_debug!(
+            "l298n bridge enable pwm: duty={} max_duty={}",
+            duty,
+            self.enable.max_duty_cycle()
+        );
+
+        self.enable.set_duty_cycle(duty).map_err(L298nError::Enable)
     }
 
     /// Stop this bridge using the configured coast or brake mode.
     pub fn stop(&mut self) -> Result<(), L298nError<PinError, PwmError>> {
+        motor_debug!("l298n bridge stop");
         self.enable
             .set_duty_cycle_fully_off()
             .map_err(L298nError::Enable)?;
 
         match self.config.stop_mode {
             MotorStopMode::Coast => {
+                motor_debug!("l298n bridge stop mode: coast (in1=LOW in2=LOW)");
                 self.in1.set_low().map_err(L298nError::Direction)?;
                 self.in2.set_low().map_err(L298nError::Direction)?;
                 Ok(())
             }
             MotorStopMode::Brake => {
+                motor_debug!("l298n bridge stop mode: brake (in1=HIGH in2=HIGH)");
                 self.in1.set_high().map_err(L298nError::Direction)?;
                 self.in2.set_high().map_err(L298nError::Direction)?;
                 self.enable

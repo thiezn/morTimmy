@@ -7,6 +7,11 @@ license.workspace = true
 [lib]
 path = "src/lib.rs"
 
+[features]
+default = []
+motor-debug = ["dep:defmt"]
+
 [dependencies]
+defmt = { workspace = true, optional = true }
 embedded-hal.workspace = true
 mortimmy-core = { path = "../core" }

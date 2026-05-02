@@ -2,7 +2,11 @@ use std::collections::BTreeMap;
 
 use anyhow::{Result, anyhow};
 use mortimmy_core::{Mode, ServoTicks};
-use mortimmy_protocol::messages::{command::Command, commands::ServoCommand, telemetry::{RangeTelemetry, Telemetry}};
+use mortimmy_protocol::messages::{
+    command::Command,
+    commands::ServoCommand,
+    telemetry::{RangeTelemetry, Telemetry},
+};
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{Duration, Instant};
 
@@ -21,14 +25,6 @@ const ACTIVE_DESIRED_STATE_INTERVAL: Duration = Duration::from_millis(75);
 const INPUT_POLL_INTERVAL: Duration = Duration::from_millis(10);
 const COMMAND_COMPLETION_HOLD_GRACE: Duration = Duration::from_millis(750);
 const MIN_LINK_TIMEOUT: Duration = Duration::from_millis(250);
-
-/// Result of handling a single operator command.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-#[allow(dead_code)]
-pub enum BrainStep {
-    Continue(Option<Telemetry>),
-    Exit,
-}
 
 /// Main host-side control loop.
 #[derive(Debug)]
@@ -233,57 +229,6 @@ impl RobotBrain {
     #[cfg(test)]
     pub fn active_controllers(&self) -> impl Iterator<Item = &ControllerInfo> {
         self.active_controllers.values()
-    }
-
-    /// Handle one operator command.
-    pub async fn step(&mut self, command: BrainCommand) -> Result<BrainStep> {
-        match command {
-            BrainCommand::Quit => Ok(BrainStep::Exit),
-            BrainCommand::Stop => {
-                self.desired_mode = self.router.default_mode;
-                self.active_control_state = ControlState::default();
-                self.desired_servo = RouterPolicy::centered_servo();
-                self.set_link_timeout_raw(self.desired_state_link_timeout_ms())
-                    .await?;
-                Ok(BrainStep::Continue(
-                    self.exchange_desired_state_raw().await?,
-                ))
-            }
-            BrainCommand::SetMode(mode) => {
-                let previous_mode = self.desired_mode;
-                self.desired_mode = mode;
-                if mode == Mode::Autonomous {
-                    self.autonomy.reset();
-                    let target = self.autonomy.target_at(Instant::now());
-                    self.active_control_state = ControlState {
-                        drive: target.drive,
-                    };
-                    self.desired_servo = target.servo;
-                } else if mode == Mode::Fault {
-                    self.active_control_state = ControlState::default();
-                    self.desired_servo = RouterPolicy::centered_servo();
-                } else if previous_mode == Mode::Autonomous {
-                    self.active_control_state = ControlState::default();
-                }
-                self.set_link_timeout_raw(self.desired_state_link_timeout_ms())
-                    .await?;
-                Ok(BrainStep::Continue(
-                    self.exchange_desired_state_raw().await?,
-                ))
-            }
-            BrainCommand::Chat(_) => Err(anyhow!("chat commands require session output")),
-            BrainCommand::Servo { pan, tilt } => {
-                self.desired_servo = ServoCommand {
-                    pan: ServoTicks(pan),
-                    tilt: ServoTicks(tilt),
-                };
-                self.set_link_timeout_raw(self.desired_state_link_timeout_ms())
-                    .await?;
-                Ok(BrainStep::Continue(
-                    self.exchange_desired_state_raw().await?,
-                ))
-            }
-        }
     }
 
     async fn query_controller_status<O>(&mut self, output: &mut O) -> Result<()>
@@ -722,14 +667,18 @@ mod tests {
 
     use anyhow::{Result, anyhow};
     use mortimmy_core::{Mode, ServoTicks};
-    use mortimmy_protocol::messages::{commands::ServoCommand, telemetry::{RangeTelemetry, Telemetry}};
+    use mortimmy_protocol::messages::{
+        commands::ServoCommand,
+        telemetry::{RangeTelemetry, Telemetry},
+    };
     use tokio::time::Instant;
 
     use super::COMMAND_COMPLETION_HOLD_GRACE;
 
     use crate::{
         brain::{
-            BrainCommand, BrainStep, RobotBrain,
+            BrainCommand,
+            RobotBrain,
             command_mapping::RouterPolicy,
             transport::{BrainTransport, TransportBackendKind},
         },
@@ -800,7 +749,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn drive_command_returns_motor_state_telemetry() {
+    async fn desired_state_exchange_returns_motor_state_telemetry() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
             BrainTransport::from_kind(
@@ -813,12 +762,13 @@ mod tests {
             SessionConfig::default(),
         );
 
-        match brain
-            .step(BrainCommand::SetMode(Mode::Teleop))
+        brain
+            .set_link_timeout_raw(brain.desired_state_link_timeout_ms())
             .await
-            .unwrap()
-        {
-            BrainStep::Continue(Some(Telemetry::DesiredState(telemetry))) => {
+            .unwrap();
+
+        match brain.exchange_desired_state_raw().await.unwrap() {
+            Some(Telemetry::DesiredState(telemetry)) => {
                 assert_eq!(telemetry.mode, Mode::Teleop);
                 assert_eq!(telemetry.drive.left_pwm.0, 0);
                 assert_eq!(telemetry.drive.right_pwm.0, 0);
@@ -828,7 +778,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn stop_command_returns_default_desired_state_telemetry() {
+    async fn stop_path_returns_default_desired_state_telemetry() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
             BrainTransport::from_kind(
@@ -848,9 +798,21 @@ mod tests {
                 speed: 300,
             }),
         };
+        brain.desired_servo = ServoCommand {
+            pan: ServoTicks(24),
+            tilt: ServoTicks(24),
+        };
 
-        match brain.step(BrainCommand::Stop).await.unwrap() {
-            BrainStep::Continue(Some(Telemetry::DesiredState(telemetry))) => {
+        brain.desired_mode = brain.router.default_mode;
+        brain.active_control_state = ControlState::default();
+        brain.desired_servo = RouterPolicy::centered_servo();
+        brain
+            .set_link_timeout_raw(brain.desired_state_link_timeout_ms())
+            .await
+            .unwrap();
+
+        match brain.exchange_desired_state_raw().await.unwrap() {
+            Some(Telemetry::DesiredState(telemetry)) => {
                 assert_eq!(telemetry.mode, Mode::Teleop);
                 assert_eq!(telemetry.drive.left_pwm.0, 0);
                 assert_eq!(telemetry.drive.right_pwm.0, 0);

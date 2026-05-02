@@ -43,6 +43,12 @@ pub struct KeyboardDriveState {
     turn_axis: i8,
     left_track: i8,
     right_track: i8,
+    w_down: bool,
+    a_down: bool,
+    s_down: bool,
+    d_down: bool,
+    e_down: bool,
+    space_down: bool,
 }
 
 impl Default for KeyboardDriveState {
@@ -53,15 +59,29 @@ impl Default for KeyboardDriveState {
             turn_axis: 0,
             left_track: 0,
             right_track: 0,
+            w_down: false,
+            a_down: false,
+            s_down: false,
+            d_down: false,
+            e_down: false,
+            space_down: false,
         }
     }
 }
 
 impl KeyboardDriveState {
-    pub fn apply_key(&mut self, key: char) -> bool {
+    pub fn apply_key_down(&mut self, key: char) -> bool {
+        self.apply_key_state(key, true)
+    }
+
+    pub fn apply_key_up(&mut self, key: char) -> bool {
+        self.apply_key_state(key, false)
+    }
+
+    fn apply_key_state(&mut self, key: char, is_down: bool) -> bool {
         match self.style {
-            KeyboardDriveStyle::Arcade => self.apply_arcade_key(key),
-            KeyboardDriveStyle::Tank => self.apply_tank_key(key),
+            KeyboardDriveStyle::Arcade => self.apply_arcade_key_state(key, is_down),
+            KeyboardDriveStyle::Tank => self.apply_tank_key_state(key, is_down),
         }
     }
 
@@ -75,6 +95,12 @@ impl KeyboardDriveState {
         self.turn_axis = 0;
         self.left_track = 0;
         self.right_track = 0;
+        self.w_down = false;
+        self.a_down = false;
+        self.s_down = false;
+        self.d_down = false;
+        self.e_down = false;
+        self.space_down = false;
     }
 
     pub fn control_state(self) -> ControlState {
@@ -103,40 +129,58 @@ impl KeyboardDriveState {
         ControlState { drive }
     }
 
-    fn apply_arcade_key(&mut self, key: char) -> bool {
-        let next = match key {
-            'w' => (1, 0),
-            'a' => (0, -1),
-            's' => (-1, 0),
-            'd' => (0, 1),
-            ' ' => (0, 0),
+    fn apply_arcade_key_state(&mut self, key: char, is_down: bool) -> bool {
+        match key {
+            'w' => self.w_down = is_down,
+            'a' => self.a_down = is_down,
+            's' => self.s_down = is_down,
+            'd' => self.d_down = is_down,
+            ' ' => self.space_down = is_down,
             _ => return false,
-        };
+        }
 
-        let changed = (self.forward_axis, self.turn_axis) != next || self.left_track != 0 || self.right_track != 0;
-        self.forward_axis = next.0;
-        self.turn_axis = next.1;
+        let previous = (self.forward_axis, self.turn_axis, self.left_track, self.right_track);
+
+        if self.space_down {
+            self.forward_axis = 0;
+            self.turn_axis = 0;
+        } else {
+            self.forward_axis = axis_from_pair(self.w_down, self.s_down);
+            self.turn_axis = axis_from_pair(self.d_down, self.a_down);
+        }
         self.left_track = 0;
         self.right_track = 0;
-        changed
+
+        previous != (self.forward_axis, self.turn_axis, self.left_track, self.right_track)
     }
 
-    fn apply_tank_key(&mut self, key: char) -> bool {
-        let (left_track, right_track) = match key {
-            'w' => (1, self.right_track),
-            's' => (-1, self.right_track),
-            'e' => (self.left_track, 1),
-            'd' => (self.left_track, -1),
-            ' ' => (0, 0),
+    fn apply_tank_key_state(&mut self, key: char, is_down: bool) -> bool {
+        match key {
+            'w' => self.w_down = is_down,
+            's' => self.s_down = is_down,
+            'e' => self.e_down = is_down,
+            'd' => self.d_down = is_down,
+            ' ' => self.space_down = is_down,
             _ => return false,
+        }
+
+        let previous = (self.forward_axis, self.turn_axis, self.left_track, self.right_track);
+
+        let (left_track, right_track) = if self.space_down {
+            (0, 0)
+        } else {
+            (
+                axis_from_pair(self.w_down, self.s_down),
+                axis_from_pair(self.e_down, self.d_down),
+            )
         };
 
-        let changed = self.left_track != left_track || self.right_track != right_track || self.forward_axis != 0 || self.turn_axis != 0;
         self.forward_axis = 0;
         self.turn_axis = 0;
         self.left_track = left_track;
         self.right_track = right_track;
-        changed
+
+        previous != (self.forward_axis, self.turn_axis, self.left_track, self.right_track)
     }
 }
 
@@ -161,6 +205,16 @@ const fn axis_to_intent(value: i8) -> i16 {
         -1 => -DriveIntent::AXIS_MAX,
         1 => DriveIntent::AXIS_MAX,
         _ => 0,
+    }
+}
+
+const fn axis_from_pair(positive: bool, negative: bool) -> i8 {
+    if positive == negative {
+        0
+    } else if positive {
+        1
+    } else {
+        -1
     }
 }
 
@@ -227,15 +281,22 @@ mod tests {
     #[test]
     fn arcade_keyboard_drive_maps_wasd_to_control_state() {
         let mut state = KeyboardDriveState::default();
-        assert!(state.apply_key('w'));
+        assert!(state.apply_key_down('w'));
         assert_eq!(state.control_state().drive.unwrap().forward, 1_000);
         assert_eq!(state.control_state().drive.unwrap().turn, 0);
 
-        assert!(state.apply_key('a'));
-        assert_eq!(state.control_state().drive.unwrap().forward, 0);
+        assert!(state.apply_key_down('a'));
+        assert_eq!(state.control_state().drive.unwrap().forward, 1_000);
         assert_eq!(state.control_state().drive.unwrap().turn, -1_000);
 
-        assert!(state.apply_key(' '));
+        assert!(state.apply_key_up('a'));
+        assert_eq!(state.control_state().drive.unwrap().forward, 1_000);
+        assert_eq!(state.control_state().drive.unwrap().turn, 0);
+
+        assert!(state.apply_key_up('w'));
+        assert_eq!(state.control_state().drive, None);
+
+        assert!(!state.apply_key_down(' '));
         assert_eq!(state.control_state().drive, None);
     }
 
@@ -246,23 +307,27 @@ mod tests {
             ..KeyboardDriveState::default()
         };
 
-        assert!(state.apply_key('w'));
+        assert!(state.apply_key_down('w'));
         assert_eq!(state.control_state().drive.unwrap().forward, 500);
         assert_eq!(state.control_state().drive.unwrap().turn, -500);
 
-        assert!(state.apply_key('e'));
+        assert!(state.apply_key_down('e'));
         assert_eq!(state.control_state().drive.unwrap().forward, 1_000);
         assert_eq!(state.control_state().drive.unwrap().turn, 0);
 
-        assert!(state.apply_key('d'));
-        assert_eq!(state.control_state().drive.unwrap().forward, 0);
-        assert_eq!(state.control_state().drive.unwrap().turn, -1_000);
+        assert!(state.apply_key_down('d'));
+        assert_eq!(state.control_state().drive.unwrap().forward, 500);
+        assert_eq!(state.control_state().drive.unwrap().turn, -500);
+
+        assert!(state.apply_key_up('d'));
+        assert_eq!(state.control_state().drive.unwrap().forward, 1_000);
+        assert_eq!(state.control_state().drive.unwrap().turn, 0);
     }
 
     #[test]
     fn toggling_keyboard_drive_style_resets_motion() {
         let mut state = KeyboardDriveState::default();
-        state.apply_key('w');
+        state.apply_key_down('w');
 
         state.toggle_style();
 

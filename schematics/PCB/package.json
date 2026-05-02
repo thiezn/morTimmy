@@ -1,0 +1,18 @@
+{
+    "name": "mortimmy-pcb",
+    "version": "0.1.0",
+    "private": true,
+    "description": "TSCircuit project for Mortimmy PCB work",
+    "main": "index.circuit.tsx",
+    "scripts": {
+        "dev": "tsci dev",
+        "build": "tsci build",
+        "snapshot": "tsci snapshot",
+        "start": "tsci dev"
+    },
+    "devDependencies": {
+        "@types/react": "^19.2.2",
+        "tscircuit": "0.0.1662"
+    },
+    "packageManager": "bun@1.3.13"
+}

@@ -5,7 +5,7 @@
 - `firmware/rp2350` for deterministic embedded control on the Pimoroni Pico LiPo 2 (RP2350B)
 - `host/mortimmy` for Raspberry Pi or macOS orchestration, transport bridging, telemetry, audio routing, and future camera control
 
-The current hardware direction is:
+The current hardware is:
 
 - Raspberry Pi 3B V1.2
 - Pimoroni Pico 2 W with Pico Audio Pack

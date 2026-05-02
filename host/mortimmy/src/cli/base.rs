@@ -1,9 +1,12 @@
 use clap::{Parser, Subcommand};
 
-use crate::cli::{config::ConfigCommand, start::StartCommand};
+use crate::cli::{config::ConfigCommand, start::StartCommand, test::TestCommand};
 
 #[derive(Debug, Parser)]
-#[command(name = "mortimmy-pi-daemon", about = "Host bridge scaffold for the mortimmy robot")]
+#[command(
+    name = "mortimmy-pi-daemon",
+    about = "Host bridge scaffold for the mortimmy robot"
+)]
 pub struct Cli {
     #[command(subcommand)]
     pub command: Command,
@@ -18,5 +21,6 @@ impl Cli {
 #[derive(Debug, Subcommand)]
 pub enum Command {
     Start(StartCommand),
+    Test(TestCommand),
     Config(ConfigCommand),
 }

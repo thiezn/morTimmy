@@ -8,4 +8,4 @@ pub mod transport;
 pub use self::command::BrainCommand;
 
 #[allow(unused_imports)]
-pub use self::robot::{BrainStep, RobotBrain};
+pub use self::robot::RobotBrain;

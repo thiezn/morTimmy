@@ -261,12 +261,9 @@ impl Runtime {
     }
 
     fn handle_key_event(&mut self, key: KeyEvent) -> Result<()> {
-        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
-            return Ok(());
-        }
-
         if key.modifiers.contains(KeyModifiers::CONTROL)
             && matches!(key.code, KeyCode::Char('c' | 'C' | 'x' | 'X'))
+            && matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat)
         {
             self.pending_events
                 .push_back(InputEvent::Command(BrainCommand::Quit));
@@ -275,6 +272,10 @@ impl Runtime {
 
         if self.model.input_mode.keyboard_drive().is_some() {
             return self.handle_keyboard_drive_key(key);
+        }
+
+        if !matches!(key.kind, KeyEventKind::Press | KeyEventKind::Repeat) {
+            return Ok(());
         }
 
         let message = match key.code {
@@ -313,21 +314,28 @@ impl Runtime {
 
     fn handle_keyboard_drive_key(&mut self, key: KeyEvent) -> Result<()> {
         let mut should_render = false;
-        match key.code {
-            KeyCode::Esc | KeyCode::Char('q' | 'Q') => {
-                self.exit_keyboard_drive_mode();
-                should_render = true;
-            }
-            KeyCode::Char(character) => {
-                let character = character.to_ascii_lowercase();
-                if character == 't' {
-                    self.toggle_keyboard_drive_style();
+        match key.kind {
+            KeyEventKind::Press | KeyEventKind::Repeat => match key.code {
+                KeyCode::Esc | KeyCode::Char('q' | 'Q') => {
+                    self.exit_keyboard_drive_mode();
                     should_render = true;
-                } else {
-                    should_render = self.apply_keyboard_drive_key(character);
+                }
+                KeyCode::Char(character) => {
+                    let character = character.to_ascii_lowercase();
+                    if character == 't' {
+                        self.toggle_keyboard_drive_style();
+                        should_render = true;
+                    } else {
+                        should_render = self.apply_keyboard_drive_key(character);
+                    }
+                }
+                _ => {}
+            },
+            KeyEventKind::Release => {
+                if let KeyCode::Char(character) = key.code {
+                    should_render = self.apply_keyboard_drive_release_key(character.to_ascii_lowercase());
                 }
             }
-            _ => {}
         }
 
         if should_render {
@@ -404,7 +412,26 @@ impl Runtime {
             return false;
         };
 
-        if !state.apply_key(key) {
+        if !state.apply_key_down(key) {
+            return false;
+        }
+
+        let control_state = state.control_state();
+        self.model.input_mode = InputMode::KeyboardDrive(state);
+        self.pending_events.push_back(InputEvent::Control(control_state));
+        true
+    }
+
+    fn apply_keyboard_drive_release_key(&mut self, key: char) -> bool {
+        let Some(mut state) = self.model.input_mode.keyboard_drive() else {
+            return false;
+        };
+
+        if !matches!(key, 'w' | 'a' | 's' | 'd' | 'e' | ' ') {
+            return false;
+        }
+
+        if !state.apply_key_up(key) {
             return false;
         }
 
