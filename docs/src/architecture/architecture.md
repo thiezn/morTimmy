@@ -59,7 +59,7 @@ The protocol crate defines the shared wire contract.
 Current message families include:
 
 - `messages::commands` for desired-state snapshots, parameter updates, audio forwarding, Trellis LED writes, status requests, and ping
-- `messages::telemetry` for desired-state acknowledgements, status, range, battery, audio status, Trellis pad events, and pong replies
+- `messages::telemetry` for desired-state acknowledgements, status, range, battery, audio status, Trellis pad events
 - `WireMessage` as the top-level direction tag shared by both families
 
 The shared protocol page at [protocol.md](protocol.md) documents the framing contract and message surface in more detail.

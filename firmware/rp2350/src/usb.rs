@@ -61,7 +61,7 @@ const STAGE_BLINK_DELAY_CYCLES: u32 = 30_000_000;
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 const STAGE_BLINK_GAP_CYCLES: u32 = 90_000_000;
 #[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-const ULTRASONIC_POLL_INTERVAL_US: u32 = 100_000;
+const ULTRASONIC_POLL_INTERVAL_US: u32 = 60_000;
 #[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
 const ULTRASONIC_LOG_DELTA_MM: u16 = 100;
 

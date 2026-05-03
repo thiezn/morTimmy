@@ -116,9 +116,9 @@ That alignment matters because the host audio planner, firmware audio queue, and
 
 ## Firmware Integration
 
-The firmware scaffold now applies protocol traffic directly into the control, audio, Trellis, and sensor task state.
+The firmware scaffold applies protocol traffic directly into the control, audio, Trellis, and sensor task state.
 
-Continuous control now has a single apply path:
+Continuous control has a single apply path:
 
 - `ControlLoop::apply_desired_state` owns the combined mode, drive, and servo update
 - `FirmwareScaffold::handle_command` acknowledges that path with `Telemetry::DesiredState`
@@ -131,4 +131,4 @@ Continuous control now has a single apply path:
 
 This is still scaffold-level behavior rather than the full executor-driven runtime, but it means the shared protocol is now executable inside the firmware crate rather than existing only as schema definitions.
 
-On the host side, the keyboard backend and autonomous runner now drive this same protocol path through the brain loop. A simple `ping` still roundtrips through shared framing and returns `pong`, but sustained control is now expressed as one desired snapshot rather than a sequence of imperative motion messages.
+On the host side, the keyboard backend and autonomous runner now drive this same protocol path through the brain loop. Sustained control is expressed as one desired snapshot rather than a sequence of imperative motion messages.

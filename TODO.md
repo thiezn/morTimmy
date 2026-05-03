@@ -6,3 +6,11 @@
 - Verify the Pico LiPo 2 battery-sense net on the actual board or schematic and confirm whether `GP29` is really the intended measurement point.
 - Determine how to read that battery-sense net on the RP235x target with `embassy-rp`, or choose a lower-level ADC path if the HAL does not expose the pin.
 - Implement battery telemetry and only re-enable the motion-controller battery-monitor capability after the ADC path is verified on hardware.
+
+
+## TS Circuit
+
+some pull requests would be nice.
+
+- The npm install doesn't work properly, could be because of nexus?
+- tscircuit init doesn't work as it hardcoded npm url instead of using the proper config

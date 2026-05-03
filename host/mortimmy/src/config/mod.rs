@@ -24,7 +24,7 @@ pub struct SessionConfig {
 impl Default for SessionConfig {
     fn default() -> Self {
         Self {
-            health_check_interval_ms: 5_000,
+            health_check_interval_ms: 100,
             reconnect_interval_ms: 2_000,
             response_timeout_ms: 2_000,
         }
