@@ -11,7 +11,8 @@ The current hardware is:
 - Pimoroni Pico 2 W with Pico Audio Pack
 - Pimoroni Pico LiPo 2
 - Liquid Crystal Display LCM1602C V2.1
-- HC-SR04 ultrasonic ranger
+- 2x HC-SR04 ultrasonic ranger
+- Adafruit 4-channel I2C-safe Bi-directional Logic Level Converter - BSS138
 - Trellis M4 4x4 keypad and LED matrix
 
 ## Hardware
@@ -23,14 +24,17 @@ The current hardware is:
 | Motion controller | Pimoroni Pico LiPo 2 (RP2350B) | USB-connected real-time controller for motors, sensors, and future servo logic |
 | Audio add-on | Pimoroni Pico Audio Pack | I2S DAC and headphone / line-out hardware mounted on the Pico 2 W |
 | Character display | LCM1602C V2.1 | 16x2 local status display driven in 4-bit mode from the audio Pico |
-| Ultrasonic sensor | HC-SR04 | Forward distance measurement for obstacle awareness |
+| Ultrasonic sensors | 2x HC-SR04 | Forward-left and forward-right distance measurement for obstacle awareness |
 | Motor drivers | 2x L298N dual H-bridge | Drive four wheel motors from the motion controller GPIO |
 | Wheel motors | 4x DC gear motors | Rover propulsion |
 | Power regulator | UBEC / buck, 5 V 3 A | Regulates battery voltage down to the Raspberry Pi supply rail |
 | Battery pack | 2x 18650, 2S | Main energy source for the rover |
 | Keypad / LEDs | Trellis M4 4x4 | Future local input and status LED surface |
+| 4-channel I2C-safe Bi-directional Logic Level Converter - BSS138 | Level shifting for HC-SR04 TRIG/ECHO wiring and future I2C peripherals |
 
 Shared crates under `crates/` define the core types, driver traits, and the wire protocol used across both sides. The protocol uses `postcard` for serialization and a COBS-framed transport with CRC16 integrity checks so the same message contract can move over USB CDC, UART, and recorded capture files.
+
+For the current ultrasonic path, the Adafruit BSS138 board should be treated as a four-channel signal translator, not as a power supply. It needs `3V3`, `5V`, and `GND` connected as reference rails, then one channel for `TRIG` and one for `ECHO` if you want a conservative 3.3 V to 5 V interface. That means one board cleanly supports two HC-SR04 modules; a third sensor only fits if you accept module-dependent direct 3.3 V triggering and reserve the board channels for `ECHO` only.
 
 Detailed architecture notes live in [docs/src/architecture/architecture.md](docs/src/architecture/architecture.md). Protocol-specific notes live in [docs/src/architecture/protocol.md](docs/src/architecture/protocol.md). Open follow-up work lives in [TODO.md](TODO.md).
 

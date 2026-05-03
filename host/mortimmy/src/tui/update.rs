@@ -91,8 +91,8 @@ pub fn update(model: &mut Model, msg: Message) -> Action {
         Message::SetDesiredMode(mode) => {
             model.summary.desired_mode = mode;
         }
-        Message::SetDistance(distance) => {
-            model.summary.distance = distance;
+        Message::SetRanges(ranges) => {
+            model.summary.ranges = ranges;
         }
         Message::Log(level, message) => {
             if allows(model.log_level, level) {

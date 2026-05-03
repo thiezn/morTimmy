@@ -44,8 +44,9 @@ mod tests {
             DriveCommand, ParameterKey, ParameterUpdate, ServoCommand, TrellisLedCommand,
         },
         telemetry::{
-            AudioStatusTelemetry, DesiredStateTelemetry, MotorStateTelemetry, PadEventKind,
-            ServoStateTelemetry, Telemetry, TrellisPadTelemetry,
+            AudioStatusTelemetry, DesiredStateTelemetry, ForwardRangeTelemetry,
+            MotorStateTelemetry, PadEventKind, ServoStateTelemetry, Telemetry,
+            TrellisPadTelemetry,
         },
     };
 
@@ -135,7 +136,7 @@ mod tests {
                     tilt: ServoTicks(1_220),
                 },
                 None,
-                None,
+                ForwardRangeTelemetry::default(),
             )));
 
         let mut buffer = [0u8; 256];

@@ -1,6 +1,6 @@
 use anyhow::Result;
 use mortimmy_core::Mode;
-use mortimmy_protocol::messages::telemetry::RangeTelemetry;
+use mortimmy_protocol::messages::telemetry::ForwardRangeTelemetry;
 
 use crate::{config::LogLevel, input::ControlState};
 
@@ -9,7 +9,7 @@ pub trait SessionOutput {
     fn set_connection_status(&mut self, status: String) -> Result<()>;
     fn set_control_state(&mut self, control_state: ControlState) -> Result<()>;
     fn set_desired_mode(&mut self, mode: Mode) -> Result<()>;
-    fn set_distance(&mut self, distance: Option<RangeTelemetry>) -> Result<()>;
+    fn set_ranges(&mut self, ranges: ForwardRangeTelemetry) -> Result<()>;
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -33,7 +33,7 @@ impl SessionOutput for NullSessionOutput {
         Ok(())
     }
 
-    fn set_distance(&mut self, _distance: Option<RangeTelemetry>) -> Result<()> {
+    fn set_ranges(&mut self, _ranges: ForwardRangeTelemetry) -> Result<()> {
         Ok(())
     }
 }

@@ -1,3 +1,4 @@
+use mortimmy_protocol::messages::telemetry::RangeTelemetry;
 use ratatui::{
     Frame,
     layout::{Alignment, Constraint, Direction, Layout, Rect},
@@ -5,7 +6,6 @@ use ratatui::{
     text::{Line, Span, Text},
     widgets::{Block, Borders, Clear, List, ListItem, Paragraph, Wrap},
 };
-use mortimmy_protocol::messages::telemetry::RangeTelemetry;
 
 use crate::config::LogLevel;
 use crate::input::ControlState;
@@ -70,7 +70,10 @@ fn render_summary(model: &Model, frame: &mut Frame, area: Rect, theme: Theme) {
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(56), Constraint::Percentage(44)])
         .split(area);
-    let (distance_label, distance_style) = describe_distance(theme, model.summary.distance);
+    let (forward_left_label, forward_left_style) =
+        describe_range_sample(theme, model.summary.ranges.forward_left);
+    let (forward_right_label, forward_right_style) =
+        describe_range_sample(theme, model.summary.ranges.forward_right);
 
     let left = vec![
         key_value_line(theme, "Config", &model.summary.config_path, theme.accent),
@@ -121,7 +124,8 @@ fn render_summary(model: &Model, frame: &mut Frame, area: Rect, theme: Theme) {
                 theme.success
             },
         ),
-        key_value_line(theme, "Distance", &distance_label, distance_style),
+        key_value_line(theme, "Range Left", &forward_left_label, forward_left_style),
+        key_value_line(theme, "Range Right", &forward_right_label, forward_right_style),
         key_value_line(
             theme,
             "Controllers",
@@ -182,8 +186,7 @@ fn render_logs(model: &Model, frame: &mut Frame, layout: ActivityLayout, theme: 
 
     if layout.button_row_area.height > 0 {
         frame.render_widget(
-            Paragraph::new(activity_button_bar(theme))
-                .wrap(Wrap { trim: false }),
+            Paragraph::new(activity_button_bar(theme)).wrap(Wrap { trim: false }),
             layout.button_row_area,
         );
     }
@@ -206,7 +209,11 @@ fn render_completions(model: &Model, frame: &mut Frame, area: Rect, theme: Theme
             let line = Line::from(vec![
                 Span::styled(
                     if selected { "> " } else { "  " },
-                    if selected { theme.selection } else { theme.muted },
+                    if selected {
+                        theme.selection
+                    } else {
+                        theme.muted
+                    },
                 ),
                 Span::styled(
                     suggestion.label.clone(),
@@ -229,7 +236,11 @@ fn render_completions(model: &Model, frame: &mut Frame, area: Rect, theme: Theme
         .collect::<Vec<_>>();
 
     frame.render_widget(
-        List::new(items).block(panel_block("Autocomplete", theme.border_emphasis, theme.title)),
+        List::new(items).block(panel_block(
+            "Autocomplete",
+            theme.border_emphasis,
+            theme.title,
+        )),
         area,
     );
 }
@@ -267,8 +278,8 @@ fn render_input(model: &Model, frame: &mut Frame, area: Rect, theme: Theme) {
             false,
         ),
     };
-    let input = Paragraph::new(content)
-        .block(panel_block(title, theme.border_emphasis, theme.title));
+    let input =
+        Paragraph::new(content).block(panel_block(title, theme.border_emphasis, theme.title));
     frame.render_widget(input, area);
 
     if show_cursor {
@@ -310,7 +321,10 @@ fn centered_rect(percent_x: u16, percent_y: u16, area: Rect) -> Rect {
         .split(vertical[1])[1]
 }
 
-fn activity_log_lines(logs: &std::collections::VecDeque<UiLogEntry>, theme: Theme) -> Vec<Line<'static>> {
+fn activity_log_lines(
+    logs: &std::collections::VecDeque<UiLogEntry>,
+    theme: Theme,
+) -> Vec<Line<'static>> {
     logs.iter()
         .map(|entry| {
             let level_style = log_level_style(theme, entry.level);
@@ -332,7 +346,12 @@ fn activity_log_lines(logs: &std::collections::VecDeque<UiLogEntry>, theme: Them
 
 fn activity_plain_log_entry(entry: &UiLogEntry) -> String {
     if entry.repeats > 1 {
-        format!("[{}] {}  x{}", log_level_label(entry.level), entry.message, entry.repeats)
+        format!(
+            "[{}] {}  x{}",
+            log_level_label(entry.level),
+            entry.message,
+            entry.repeats
+        )
     } else {
         format!("[{}] {}", log_level_label(entry.level), entry.message)
     }
@@ -348,11 +367,12 @@ fn describe_control_state(control_state: ControlState) -> String {
     }
 }
 
-fn describe_distance(theme: Theme, distance: Option<RangeTelemetry>) -> (String, Style) {
-    match distance {
-        Some(distance) if distance.quality == 0 => {
-            (format!("{} mm (out of range)", distance.distance_mm.0), theme.warning)
-        }
+fn describe_range_sample(theme: Theme, range: Option<RangeTelemetry>) -> (String, Style) {
+    match range {
+        Some(distance) if distance.quality == 0 => (
+            format!("{} mm (out of range)", distance.distance_mm.0),
+            theme.warning,
+        ),
         Some(distance) => (format!("{} mm", distance.distance_mm.0), theme.success),
         None => ("awaiting sample".to_string(), theme.muted),
     }
@@ -426,7 +446,10 @@ fn key_value_line(theme: Theme, label: &str, value: &str, value_style: Style) ->
 
 fn connection_style(theme: Theme, status: &str) -> Style {
     let lowered = status.to_ascii_lowercase();
-    if lowered.contains("disconnected") || lowered.contains("unavailable") || lowered.contains("failed") {
+    if lowered.contains("disconnected")
+        || lowered.contains("unavailable")
+        || lowered.contains("failed")
+    {
         theme.warning
     } else if lowered.contains("connecting") || lowered.contains("retrying") {
         theme.info
@@ -508,7 +531,9 @@ fn activity_panel_layout(model: &Model, panel_area: Rect) -> ActivityLayout {
         1,
     );
     let copy_last_button_area = Rect::new(
-        copy_all_button_area.x.saturating_add(copy_all_button_area.width + 1),
+        copy_all_button_area
+            .x
+            .saturating_add(copy_all_button_area.width + 1),
         button_row_area.y,
         COPY_LAST_LABEL.len() as u16,
         1,

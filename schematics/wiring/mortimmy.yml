@@ -82,10 +82,19 @@ connectors:
     subtype: right GPIO
 
   PICO_CTRL_SENSOR:
-    pinlabels: [ "VBUS P40 5V", "GP14 P19 TRIG", "GP15 P20 ECHO", "GND P23" ]
+    pinlabels:
+      [
+        "3V3 OUT",
+        "VBUS P40 5V",
+        "GP14 P19 TRIG_LEFT",
+        "GP15 P20 ECHO_LEFT",
+        "GP16 P21 TRIG_RIGHT",
+        "GP17 P22 ECHO_RIGHT",
+        "GND P23",
+      ]
     type: Pico LiPo 2
     subtype: ultrasonic GPIO
-    notes: ECHO must be reduced to 3.3 V before GP15.
+    notes: Two HC-SR04 modules share one 4-channel BSS138 level shifter.
 
   DRV_LEFT_CTRL:
     pinlabels: [ "ENA", "IN1", "IN2", "IN3", "IN4", "ENB", "GND" ]
@@ -141,15 +150,36 @@ connectors:
   US1:
     pinlabels: [ "VCC", "TRIG", "ECHO", "GND" ]
     type: HC-SR04
-    subtype: 5 V ultrasonic
-    notes: 2 cm to 4 m, about 15 mA, 10 us trigger pulse, mounted on the motor and
-      sensor Pico.
+    subtype: 5 V ultrasonic, forward-left about 45 degrees
+    notes: 2 cm to 4 m, about 15 mA, 10 us trigger pulse. Forward-left obstacle
+      sensor.
 
-  ECHO_DIV1:
-    pinlabels: [ "IN_5V", "OUT_3V3", "GND" ]
-    type: Divider / level shifter
-    subtype: ECHO 5 V to 3.3 V
-    notes: "Example: 15 kOhm over 10 kOhm."
+  US2:
+    pinlabels: [ "VCC", "TRIG", "ECHO", "GND" ]
+    type: HC-SR04
+    subtype: 5 V ultrasonic, forward-right about 45 degrees
+    notes: 2 cm to 4 m, about 15 mA, 10 us trigger pulse. Forward-right obstacle
+      sensor.
+
+  LEVEL_SHIFT1:
+    pinlabels:
+      [
+        "LV 3V3",
+        "HV 5V",
+        "GND",
+        "LV1 LEFT_TRIG_LO",
+        "HV1 LEFT_TRIG_HI",
+        "LV2 LEFT_ECHO_LO",
+        "HV2 LEFT_ECHO_HI",
+        "LV3 RIGHT_TRIG_LO",
+        "HV3 RIGHT_TRIG_HI",
+        "LV4 RIGHT_ECHO_LO",
+        "HV4 RIGHT_ECHO_HI",
+      ]
+    type: Adafruit level converter
+    subtype: 4-channel BSS138
+    notes: Four independent BSS138 channels with 10 kOhm pullups. All four channels
+      are used by the left and right HC-SR04 TRIG/ECHO pairs.
 
   LCD1:
     pinlabels:
@@ -263,23 +293,71 @@ cables:
     gauge: 26 AWG
     colors: [ VT, BU, GY, OG, BN, PK, BK ]
 
-  US_MAIN:
+  US_LEFT_POWER:
     category: bundle
     length: 0.18
     gauge: 26 AWG
-    colors: [ RD, YE, BK ]
+    colors: [ RD, BK ]
 
-  US_ECHO_RAW:
-    wirecount: 1
-    length: 0.06
+  US_RIGHT_POWER:
+    category: bundle
+    length: 0.18
     gauge: 26 AWG
-    colors: [ GN ]
+    colors: [ RD, BK ]
 
-  US_ECHO_SAFE:
+  US_LEVEL_POWER:
     category: bundle
     length: 0.10
     gauge: 26 AWG
-    colors: [ GN, BK ]
+    colors: [ WH, RD, BK ]
+
+  US_LEFT_TRIG_LOW:
+    wirecount: 1
+    length: 0.06
+    gauge: 26 AWG
+    colors: [ YE ]
+
+  US_LEFT_TRIG_HIGH:
+    wirecount: 1
+    length: 0.08
+    gauge: 26 AWG
+    colors: [ OG ]
+
+  US_LEFT_ECHO_HIGH:
+    wirecount: 1
+    length: 0.08
+    gauge: 26 AWG
+    colors: [ GN ]
+
+  US_LEFT_ECHO_LOW:
+    wirecount: 1
+    length: 0.10
+    gauge: 26 AWG
+    colors: [ BU ]
+
+  US_RIGHT_TRIG_LOW:
+    wirecount: 1
+    length: 0.06
+    gauge: 26 AWG
+    colors: [ VT ]
+
+  US_RIGHT_TRIG_HIGH:
+    wirecount: 1
+    length: 0.08
+    gauge: 26 AWG
+    colors: [ PK ]
+
+  US_RIGHT_ECHO_HIGH:
+    wirecount: 1
+    length: 0.08
+    gauge: 26 AWG
+    colors: [ GY ]
+
+  US_RIGHT_ECHO_LOW:
+    wirecount: 1
+    length: 0.10
+    gauge: 26 AWG
+    colors: [ BN ]
 
   LEFT_FRONT_MOTOR:
     category: bundle
@@ -366,17 +444,49 @@ connections:
     - CTRL_RIGHT: [ 1-7 ]
     - DRV_RIGHT_CTRL: [ 1-7 ]
 
-  - - PICO_CTRL_SENSOR: [ 1, 2, 4 ]
-    - US_MAIN: [ 1-3 ]
-    - US1: [ 1, 2, 4 ]
+  - - PICO_CTRL_SENSOR: [ 1-2, 7 ]
+    - US_LEVEL_POWER: [ 1-3 ]
+    - LEVEL_SHIFT1: [ 1-3 ]
+
+  - - LEVEL_SHIFT1: [ 2-3 ]
+    - US_LEFT_POWER: [ 1-2 ]
+    - US1: [ 1, 4 ]
+
+  - - LEVEL_SHIFT1: [ 2-3 ]
+    - US_RIGHT_POWER: [ 1-2 ]
+    - US2: [ 1, 4 ]
+
+  - - PICO_CTRL_SENSOR: 3
+    - US_LEFT_TRIG_LOW: 1
+    - LEVEL_SHIFT1: 4
+
+  - - LEVEL_SHIFT1: 5
+    - US_LEFT_TRIG_HIGH: 1
+    - US1: 2
 
   - - US1: 3
-    - US_ECHO_RAW: 1
-    - ECHO_DIV1: 1
+    - US_LEFT_ECHO_HIGH: 1
+    - LEVEL_SHIFT1: 7
 
-  - - ECHO_DIV1: [ 2-3 ]
-    - US_ECHO_SAFE: [ 1-2 ]
-    - PICO_CTRL_SENSOR: [ 3-4 ]
+  - - LEVEL_SHIFT1: 6
+    - US_LEFT_ECHO_LOW: 1
+    - PICO_CTRL_SENSOR: 4
+
+  - - PICO_CTRL_SENSOR: 5
+    - US_RIGHT_TRIG_LOW: 1
+    - LEVEL_SHIFT1: 8
+
+  - - LEVEL_SHIFT1: 9
+    - US_RIGHT_TRIG_HIGH: 1
+    - US2: 2
+
+  - - US2: 3
+    - US_RIGHT_ECHO_HIGH: 1
+    - LEVEL_SHIFT1: 11
+
+  - - LEVEL_SHIFT1: 10
+    - US_RIGHT_ECHO_LOW: 1
+    - PICO_CTRL_SENSOR: 6
 
   - - DRV_LEFT_OUT: [ 1-2 ]
     - LEFT_FRONT_MOTOR: [ 1-2 ]

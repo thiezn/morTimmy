@@ -6,14 +6,14 @@ use std::{
     time::{Duration, Instant},
 };
 
-use arboard::Clipboard;
 use anyhow::{Context, Result};
+use arboard::Clipboard;
 use crossterm::event::{
     self, Event, KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent,
     MouseEventKind,
 };
 use mortimmy_core::Mode;
-use mortimmy_protocol::messages::telemetry::RangeTelemetry;
+use mortimmy_protocol::messages::telemetry::ForwardRangeTelemetry;
 
 use crate::{
     brain::BrainCommand,
@@ -81,7 +81,7 @@ fn initial_model(config: TuiConfig) -> Model {
             connection_status: "connecting".to_string(),
             control_state: Default::default(),
             desired_mode: config.initial_mode,
-            distance: None,
+            ranges: ForwardRangeTelemetry::default(),
             transport_label: config.transport_label,
             serial_target: config.serial_target,
             nexo_gateway: config.nexo_gateway,
@@ -132,7 +132,8 @@ pub fn new_session(
 
 impl Runtime {
     fn render(&mut self) -> Result<()> {
-        self.terminal.draw(|frame| view::view(&mut self.model, frame))?;
+        self.terminal
+            .draw(|frame| view::view(&mut self.model, frame))?;
         Ok(())
     }
 
@@ -333,7 +334,8 @@ impl Runtime {
             },
             KeyEventKind::Release => {
                 if let KeyCode::Char(character) = key.code {
-                    should_render = self.apply_keyboard_drive_release_key(character.to_ascii_lowercase());
+                    should_render =
+                        self.apply_keyboard_drive_release_key(character.to_ascii_lowercase());
                 }
             }
         }
@@ -357,7 +359,9 @@ impl Runtime {
         self.model.show_help = false;
         self.model.help_topic = None;
         self.pending_events
-            .push_back(InputEvent::ControllerConnected(tui_keyboard_controller_info()));
+            .push_back(InputEvent::ControllerConnected(
+                tui_keyboard_controller_info(),
+            ));
         self.pending_events.push_back(InputEvent::Warning(
             InputWarning::Status(
                 "TUI keyboard drive active: w,a,s,d mode; press t for tank, Space to stop, Esc or q to exit"
@@ -375,12 +379,14 @@ impl Runtime {
             self.pending_events
                 .push_back(InputEvent::Control(Default::default()));
         }
-        self.pending_events.push_back(InputEvent::ControllerDisconnected(
-            tui_keyboard_controller_info(),
-        ));
-        self.pending_events.push_back(InputEvent::Warning(
-            InputWarning::Status("TUI keyboard drive exited; command input restored".into()),
-        ));
+        self.pending_events
+            .push_back(InputEvent::ControllerDisconnected(
+                tui_keyboard_controller_info(),
+            ));
+        self.pending_events
+            .push_back(InputEvent::Warning(InputWarning::Status(
+                "TUI keyboard drive exited; command input restored".into(),
+            )));
         self.model.input_mode = InputMode::Command;
     }
 
@@ -396,15 +402,14 @@ impl Runtime {
             self.pending_events
                 .push_back(InputEvent::Control(Default::default()));
         }
-        self.pending_events.push_back(InputEvent::Warning(
-            InputWarning::Status(
+        self.pending_events
+            .push_back(InputEvent::Warning(InputWarning::Status(
                 format!(
                     "TUI keyboard drive style switched to {}",
                     state.style.as_str()
                 )
                 .into(),
-            ),
-        ));
+            )));
     }
 
     fn apply_keyboard_drive_key(&mut self, key: char) -> bool {
@@ -418,7 +423,8 @@ impl Runtime {
 
         let control_state = state.control_state();
         self.model.input_mode = InputMode::KeyboardDrive(state);
-        self.pending_events.push_back(InputEvent::Control(control_state));
+        self.pending_events
+            .push_back(InputEvent::Control(control_state));
         true
     }
 
@@ -437,7 +443,8 @@ impl Runtime {
 
         let control_state = state.control_state();
         self.model.input_mode = InputMode::KeyboardDrive(state);
-        self.pending_events.push_back(InputEvent::Control(control_state));
+        self.pending_events
+            .push_back(InputEvent::Control(control_state));
         true
     }
 
@@ -565,7 +572,9 @@ impl CommandInputSource for TuiInput {
 
 impl SessionOutput for TuiOutput {
     fn log(&mut self, level: LogLevel, message: String) -> Result<()> {
-        self.shared.borrow_mut().dispatch(Message::Log(level, message))
+        self.shared
+            .borrow_mut()
+            .dispatch(Message::Log(level, message))
     }
 
     fn set_connection_status(&mut self, status: String) -> Result<()> {
@@ -581,13 +590,15 @@ impl SessionOutput for TuiOutput {
     }
 
     fn set_desired_mode(&mut self, mode: Mode) -> Result<()> {
-        self.shared.borrow_mut().dispatch(Message::SetDesiredMode(mode))
-    }
-
-    fn set_distance(&mut self, distance: Option<RangeTelemetry>) -> Result<()> {
         self.shared
             .borrow_mut()
-            .dispatch(Message::SetDistance(distance))
+            .dispatch(Message::SetDesiredMode(mode))
+    }
+
+    fn set_ranges(&mut self, ranges: ForwardRangeTelemetry) -> Result<()> {
+        self.shared
+            .borrow_mut()
+            .dispatch(Message::SetRanges(ranges))
     }
 }
 
@@ -596,6 +607,7 @@ mod tests {
     use std::path::PathBuf;
 
     use mortimmy_core::Mode;
+    use mortimmy_protocol::messages::telemetry::ForwardRangeTelemetry;
 
     use super::{TuiConfig, initial_model};
     use crate::config::LogLevel;
@@ -620,7 +632,7 @@ mod tests {
         assert_eq!(model.summary.config_path, "config/mortimmy.toml");
         assert_eq!(model.summary.connection_status, "connecting");
         assert_eq!(model.summary.desired_mode, Mode::Autonomous);
-        assert_eq!(model.summary.distance, None);
+        assert_eq!(model.summary.ranges, ForwardRangeTelemetry::default());
         assert_eq!(model.summary.transport_label, "loopback");
         assert_eq!(model.summary.serial_target, "/dev/tty.usbmodem");
         assert_eq!(model.summary.controller_selection, "any");
@@ -629,7 +641,10 @@ mod tests {
         assert!(model.summary.active_controllers.is_empty());
         assert_eq!(model.logs.len(), 1);
         assert_eq!(model.logs[0].level, LogLevel::Info);
-        assert_eq!(model.logs[0].message, "session ready; type /help to view commands");
+        assert_eq!(
+            model.logs[0].message,
+            "session ready; type /help to view commands"
+        );
         assert_eq!(model.logs[0].repeats, 1);
     }
 }

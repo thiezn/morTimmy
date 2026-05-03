@@ -14,6 +14,7 @@ This section collects the concrete hardware parts currently used or evaluated fo
 ## Sensors and user interface
 
 - [HC-SR04 Ultrasonic Sensor](components/hc-sr04/index.md): forward distance sensing.
+- Adafruit 4-channel I2C-safe Bi-directional Logic Level Converter (BSS138): shared 3.3 V to 5 V signal translation for HC-SR04 TRIG/ECHO lines and future open-drain peripherals.
 - [Liquid Crystal Display](components/liquid-crystal-display/index.md): 16x2 character display for local status output.
 - [Trellis M4 4x4](components/trellis-m4-4x4/index.md): keypad and LED matrix for future local interaction.
 

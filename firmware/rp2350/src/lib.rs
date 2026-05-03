@@ -19,7 +19,7 @@ use mortimmy_protocol::messages::{
     commands::{ParameterKey, ParameterUpdate},
     telemetry::{
         AudioStatusTelemetry, ControllerCapabilities, ControllerRole, DesiredStateTelemetry,
-        StatusTelemetry, Telemetry,
+        RangeSensorPosition, StatusTelemetry, Telemetry,
     },
 };
 
@@ -278,7 +278,7 @@ impl FirmwareScaffold {
             uptime_ms: 0,
             link_quality: DEFAULT_LINK_QUALITY,
             error: self.control.last_error,
-            range: self.sensors.ultrasonic.last_sample,
+            ranges: self.sensors.ultrasonic.ranges,
         }
     }
 
@@ -289,7 +289,7 @@ impl FirmwareScaffold {
             self.control.drive.telemetry(),
             self.control.servo.telemetry(),
             self.control.last_error,
-            self.sensors.ultrasonic.last_sample,
+            self.sensors.ultrasonic.ranges,
         )
     }
 
@@ -310,8 +310,13 @@ impl FirmwareScaffold {
     }
 
     /// Record a range measurement and return its telemetry representation.
-    pub fn record_range_measurement(&mut self, distance_mm: Millimeters, quality: u8) -> Telemetry {
-        Telemetry::Range(self.sensors.record_range(distance_mm, quality))
+    pub fn record_range_measurement(
+        &mut self,
+        sensor: RangeSensorPosition,
+        distance_mm: Millimeters,
+        quality: u8,
+    ) -> Telemetry {
+        Telemetry::Range(self.sensors.record_range(sensor, distance_mm, quality))
     }
 
     /// Record a battery measurement and return its telemetry representation.
@@ -466,7 +471,10 @@ mod tests {
             AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding, DesiredStateCommand,
             DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
         },
-        telemetry::{ControllerCapabilities, PadEventKind, Telemetry, TrellisPadTelemetry},
+        telemetry::{
+            ControllerCapabilities, PadEventKind, RangeSensorPosition, Telemetry,
+            TrellisPadTelemetry,
+        },
     };
 
     use super::{
@@ -615,23 +623,40 @@ mod tests {
     }
 
     #[test]
-    fn status_and_desired_state_telemetry_include_latest_range_sample() {
+    fn status_and_desired_state_telemetry_include_latest_range_samples() {
         let mut scaffold = FirmwareScaffold::default();
-        scaffold.record_range_measurement(Millimeters(287), 100);
+        scaffold.record_range_measurement(RangeSensorPosition::ForwardLeft, Millimeters(287), 100);
+        scaffold.record_range_measurement(RangeSensorPosition::ForwardRight, Millimeters(451), 95);
 
         assert_eq!(
-            scaffold.status_telemetry().range,
-            Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
-                distance_mm: Millimeters(287),
-                quality: 100,
-            })
+            scaffold.status_telemetry().ranges,
+            mortimmy_protocol::messages::telemetry::ForwardRangeTelemetry {
+                forward_left: Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
+                    sensor: RangeSensorPosition::ForwardLeft,
+                    distance_mm: Millimeters(287),
+                    quality: 100,
+                }),
+                forward_right: Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
+                    sensor: RangeSensorPosition::ForwardRight,
+                    distance_mm: Millimeters(451),
+                    quality: 95,
+                }),
+            }
         );
         assert_eq!(
-            scaffold.desired_state_telemetry().range,
-            Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
-                distance_mm: Millimeters(287),
-                quality: 100,
-            })
+            scaffold.desired_state_telemetry().ranges,
+            mortimmy_protocol::messages::telemetry::ForwardRangeTelemetry {
+                forward_left: Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
+                    sensor: RangeSensorPosition::ForwardLeft,
+                    distance_mm: Millimeters(287),
+                    quality: 100,
+                }),
+                forward_right: Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
+                    sensor: RangeSensorPosition::ForwardRight,
+                    distance_mm: Millimeters(451),
+                    quality: 95,
+                }),
+            }
         );
     }
 

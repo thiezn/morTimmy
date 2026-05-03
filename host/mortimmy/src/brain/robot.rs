@@ -5,7 +5,7 @@ use mortimmy_core::{Mode, ServoTicks};
 use mortimmy_protocol::messages::{
     command::Command,
     commands::ServoCommand,
-    telemetry::{RangeTelemetry, Telemetry},
+    telemetry::{ForwardRangeTelemetry, RangeSensorPosition, RangeTelemetry, Telemetry},
 };
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{Duration, Instant};
@@ -40,6 +40,7 @@ pub struct RobotBrain {
     desired_mode: Mode,
     desired_servo: ServoCommand,
     active_control_state: ControlState,
+    latest_ranges: ForwardRangeTelemetry,
     health_check_interval: Duration,
     reconnect_interval: Duration,
     active_desired_state_interval: Duration,
@@ -85,6 +86,7 @@ impl RobotBrain {
             desired_mode,
             desired_servo,
             active_control_state: ControlState::default(),
+            latest_ranges: ForwardRangeTelemetry::default(),
             health_check_interval: Duration::from_millis(session.health_check_interval_ms.max(1)),
             reconnect_interval,
             active_desired_state_interval: ACTIVE_DESIRED_STATE_INTERVAL,
@@ -106,6 +108,7 @@ impl RobotBrain {
         }
         output.set_desired_mode(self.desired_mode)?;
         output.set_control_state(self.active_control_state)?;
+        output.set_ranges(self.latest_ranges)?;
 
         'run: loop {
             self.drain_chat_events(output)?;
@@ -354,11 +357,11 @@ impl RobotBrain {
         Ok(())
     }
 
-    fn refresh_active_control_hold<I>(&mut self, input: &mut I) -> Result<()>
+    fn refresh_active_control_hold<I>(&mut self, input: &mut I, had_active_drive: bool) -> Result<()>
     where
         I: CommandInputSource,
     {
-        if self.active_control_state.drive.is_some() {
+        if had_active_drive {
             input.extend_active_control(COMMAND_COMPLETION_HOLD_GRACE)?;
         }
 
@@ -560,22 +563,24 @@ impl RobotBrain {
                         self.apply_control_state(control_state, output).await?;
                     }
 
+                    let had_active_drive = self.active_control_state.drive.is_some();
+
                     match command {
                         BrainCommand::Quit => return Ok(true),
                         BrainCommand::Stop => {
                             self.stop_desired_motion(output).await?;
-                            self.refresh_active_control_hold(input)?;
+                            self.refresh_active_control_hold(input, had_active_drive)?;
                         }
                         BrainCommand::SetMode(mode) => {
                             self.apply_desired_mode(mode, output).await?;
-                            self.refresh_active_control_hold(input)?;
+                            self.refresh_active_control_hold(input, had_active_drive)?;
                         }
                         BrainCommand::Chat(prompt) => {
                             self.handle_chat_command(prompt, output).await?;
                         }
                         BrainCommand::Servo { pan, tilt } => {
                             self.apply_desired_servo(pan, tilt, output).await?;
-                            self.refresh_active_control_hold(input)?;
+                            self.refresh_active_control_hold(input, had_active_drive)?;
                         }
                     }
                 }
@@ -622,6 +627,7 @@ impl RobotBrain {
         self.autonomy.reset();
         self.active_controllers.clear();
         self.active_control_state = ControlState::default();
+        self.latest_ranges = ForwardRangeTelemetry::default();
         self.last_desired_state_at = None;
         self.applied_link_timeout_ms = None;
         output.set_connection_status(format!(
@@ -630,7 +636,7 @@ impl RobotBrain {
         ))?;
         output.set_desired_mode(self.desired_mode)?;
         output.set_control_state(self.active_control_state)?;
-        output.set_distance(None)?;
+        output.set_ranges(self.latest_ranges)?;
         output.log(LogLevel::Warn, message)?;
         self.transport.disconnect();
         Ok(())
@@ -640,8 +646,9 @@ impl RobotBrain {
     where
         O: SessionOutput,
     {
-        if let Some(distance) = latest_range_sample(&telemetry) {
-            output.set_distance(Some(distance))?;
+        if let Some(ranges) = updated_ranges(self.latest_ranges, &telemetry) {
+            self.latest_ranges = ranges;
+            output.set_ranges(ranges)?;
         }
         output.log(
             LogLevel::Info,
@@ -652,13 +659,22 @@ impl RobotBrain {
     }
 }
 
-fn latest_range_sample(telemetry: &Telemetry) -> Option<RangeTelemetry> {
+fn updated_ranges(current: ForwardRangeTelemetry, telemetry: &Telemetry) -> Option<ForwardRangeTelemetry> {
     match telemetry {
-        Telemetry::Status(status) => status.range,
-        Telemetry::DesiredState(desired_state) => desired_state.range,
-        Telemetry::Range(range) => Some(*range),
+        Telemetry::Status(status) => Some(status.ranges),
+        Telemetry::DesiredState(desired_state) => Some(desired_state.ranges),
+        Telemetry::Range(range) => Some(merge_range_sample(current, *range)),
         _ => None,
     }
+}
+
+fn merge_range_sample(mut ranges: ForwardRangeTelemetry, range: RangeTelemetry) -> ForwardRangeTelemetry {
+    match range.sensor {
+        RangeSensorPosition::ForwardLeft => ranges.forward_left = Some(range),
+        RangeSensorPosition::ForwardRight => ranges.forward_right = Some(range),
+    }
+
+    ranges
 }
 
 #[cfg(test)]
@@ -669,7 +685,7 @@ mod tests {
     use mortimmy_core::{Mode, ServoTicks};
     use mortimmy_protocol::messages::{
         commands::ServoCommand,
-        telemetry::{RangeTelemetry, Telemetry},
+        telemetry::{ForwardRangeTelemetry, RangeSensorPosition, RangeTelemetry, Telemetry},
     };
     use tokio::time::Instant;
 
@@ -677,8 +693,7 @@ mod tests {
 
     use crate::{
         brain::{
-            BrainCommand,
-            RobotBrain,
+            BrainCommand, RobotBrain,
             command_mapping::RouterPolicy,
             transport::{BrainTransport, TransportBackendKind},
         },
@@ -702,7 +717,7 @@ mod tests {
         connection_status: String,
         control_state: ControlState,
         desired_mode: Mode,
-        distance: Option<RangeTelemetry>,
+        ranges: ForwardRangeTelemetry,
     }
 
     impl SessionOutput for RecordingOutput {
@@ -726,8 +741,8 @@ mod tests {
             Ok(())
         }
 
-        fn set_distance(&mut self, distance: Option<RangeTelemetry>) -> Result<()> {
-            self.distance = distance;
+        fn set_ranges(&mut self, ranges: ForwardRangeTelemetry) -> Result<()> {
+            self.ranges = ranges;
             Ok(())
         }
     }
@@ -822,7 +837,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn handle_telemetry_updates_distance_from_latest_range_sample() {
+    async fn handle_telemetry_updates_ranges_from_latest_range_sample() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
             BrainTransport::from_kind(
@@ -839,6 +854,7 @@ mod tests {
         brain
             .handle_telemetry(
                 Telemetry::Range(RangeTelemetry {
+                    sensor: RangeSensorPosition::ForwardLeft,
                     distance_mm: mortimmy_core::Millimeters(412),
                     quality: 100,
                 }),
@@ -847,11 +863,15 @@ mod tests {
             .unwrap();
 
         assert_eq!(
-            output.distance,
-            Some(RangeTelemetry {
-                distance_mm: mortimmy_core::Millimeters(412),
-                quality: 100,
-            })
+            output.ranges,
+            ForwardRangeTelemetry {
+                forward_left: Some(RangeTelemetry {
+                    sensor: RangeSensorPosition::ForwardLeft,
+                    distance_mm: mortimmy_core::Millimeters(412),
+                    quality: 100,
+                }),
+                forward_right: None,
+            }
         );
     }
 

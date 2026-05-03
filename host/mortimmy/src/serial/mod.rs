@@ -136,7 +136,10 @@ mod tests {
         WireMessage,
         command::Command,
         commands::{DesiredStateCommand, DriveCommand, ServoCommand},
-        telemetry::{ControllerCapabilities, ControllerRole, StatusTelemetry, Telemetry},
+        telemetry::{
+            ControllerCapabilities, ControllerRole, ForwardRangeTelemetry, StatusTelemetry,
+            Telemetry,
+        },
     };
 
     use super::{SerialBridge, SerialConfig};
@@ -194,7 +197,7 @@ mod tests {
             uptime_ms: 42,
             link_quality: 100,
             error: None,
-            range: None,
+            ranges: ForwardRangeTelemetry::default(),
         }));
         let mut payload_buffer = [0u8; mortimmy_protocol::MAX_PAYLOAD_LEN];
         let payload = mortimmy_protocol::encode_message(&message, &mut payload_buffer).unwrap();

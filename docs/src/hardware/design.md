@@ -161,6 +161,23 @@ Power delivery and data signaling are always routed separately except where stan
 | SPI          | High‑speed peripherals | Fast, robust                 | More wires                          |
 | CAN (future) | Distributed modules    | Robust, fault tolerant       | Extra transceivers                  |
 
+### Forward obstacle sensing
+
+The motion controller now owns a dual ultrasonic sensing pair built from two HC-SR04 modules.
+
+*   One sensor is mounted forward-left at roughly 45 degrees.
+*   One sensor is mounted forward-right at roughly 45 degrees.
+*   Both sensors are powered from the 5V logic rail.
+*   Both sensors share one Adafruit 4-channel BSS138 level converter.
+
+The current pin and signal contract is:
+
+*   GP14 / GP15: forward-left `TRIG` and `ECHO`
+*   GP16 / GP17: forward-right `TRIG` and `ECHO`
+*   The level converter uses all four BSS138 channels: left `TRIG`, left `ECHO`, right `TRIG`, right `ECHO`
+
+The firmware polls the two HC-SR04 modules sequentially rather than simultaneously. That avoids overlapping trigger bursts and reduces acoustic crosstalk between the left and right forward cones.
+
 
 ## 7. Design Rules
 

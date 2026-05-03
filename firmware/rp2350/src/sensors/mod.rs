@@ -4,7 +4,9 @@ pub mod battery;
 pub mod ultrasonic;
 
 use mortimmy_core::Millimeters;
-use mortimmy_protocol::messages::telemetry::{BatteryTelemetry, RangeTelemetry};
+use mortimmy_protocol::messages::telemetry::{
+    BatteryTelemetry, RangeSensorPosition, RangeTelemetry,
+};
 
 use self::battery::BatteryMonitorTask;
 use self::ultrasonic::UltrasonicTask;
@@ -20,8 +22,13 @@ pub struct SensorSuite {
 
 impl SensorSuite {
     /// Record a new ultrasonic ranging sample.
-    pub fn record_range(&mut self, distance_mm: Millimeters, quality: u8) -> RangeTelemetry {
-        self.ultrasonic.record_measurement(distance_mm, quality)
+    pub fn record_range(
+        &mut self,
+        sensor: RangeSensorPosition,
+        distance_mm: Millimeters,
+        quality: u8,
+    ) -> RangeTelemetry {
+        self.ultrasonic.record_measurement(sensor, distance_mm, quality)
     }
 
     /// Record a new battery monitor sample.

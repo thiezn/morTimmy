@@ -43,14 +43,40 @@ Motor outputs:
 
 ### HC-SR04 wiring
 
-| Pico LiPo 2 pin | HC-SR04 pin | Notes |
-| --- | --- | --- |
-| VBUS / 5V | VCC | Sensor is powered from the Pico USB 5V rail in the current wiring plan |
-| GP14 | TRIG | Trigger output driven directly by firmware |
-| GP15 | ECHO | Route through the ECHO divider before the Pico pin |
-| GND | GND | Shared logic ground |
+The current wiring plan uses two HC-SR04 modules mounted forward-left and forward-right at roughly 45 degrees. Both sensors share the single Adafruit 4-channel I2C-safe bi-directional logic level converter board. That breakout has four independent BSS138 channels with 10 kOhm pull-ups, plus shared `LV`, `HV`, and `GND` reference rails.
 
-The ECHO line must be level shifted down to 3.3 V before it reaches GP15. The current WireViz source models that as `ECHO_DIV1` between the raw sensor ECHO output and the Pico input.
+Shared rails:
+
+| Pico LiPo 2 pin | Level converter pin | HC-SR04 pin | Notes |
+| --- | --- | --- | --- |
+| 3V3 OUT (The + pin on our Pico) | LV | - | Required low-side reference for the BSS138 board |
+| VBUS / 5V | HV | VCC on both sensors | High-side reference rail and shared sensor supply |
+| GND | GND | GND on both sensors | Shared logic ground across Pico, converter, and both sensors |
+
+Forward-left sensor:
+
+| Pico LiPo 2 pin | Level converter pin | HC-SR04 pin | Notes |
+| --- | --- | --- | --- |
+| GP14 | LV1 | TRIG via HV1 | Forward-left trigger output |
+| GP15 | LV2 via HV2 | ECHO | Forward-left echo input level shifted back to 3.3 V |
+
+Forward-right sensor:
+
+| Pico LiPo 2 pin | Level converter pin | HC-SR04 pin | Notes |
+| --- | --- | --- | --- |
+| GP16 | LV3 | TRIG via HV3 | Forward-right trigger output |
+| GP17 | LV4 via HV4 | ECHO | Forward-right echo input level shifted back to 3.3 V |
+
+This is a better fit than the earlier passive divider note because the converter needs both the Pico `3V3` rail and the sensor `5V` rail to operate. The current WireViz source now models that explicitly.
+
+With conservative level shifting on both `TRIG` and `ECHO`, the two HC-SR04 modules fully consume the four BSS138 channels on the Adafruit board. There are no spare shifted channels left for a third ultrasonic sensor in this wiring plan.
+
+The motion-controller firmware now binds both sensors directly:
+
+- `GP14` / `GP15` for the forward-left sensor
+- `GP16` / `GP17` for the forward-right sensor
+
+The firmware polls the two sensors sequentially rather than simultaneously so one module finishes its acoustic burst before the other starts.
 
 ### Current motion-controller scope
 

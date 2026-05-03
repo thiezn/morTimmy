@@ -145,7 +145,8 @@ pub async fn test(command: TestCommand) -> anyhow::Result<()> {
     }
 
     let response_timeout = Duration::from_millis(runtime_config.session.response_timeout_ms.max(1));
-    let reconnect_interval = Duration::from_millis(runtime_config.session.reconnect_interval_ms.max(1));
+    let reconnect_interval =
+        Duration::from_millis(runtime_config.session.reconnect_interval_ms.max(1));
     let mut transport = BrainTransport::from_kind(
         command.transport_backend,
         runtime_config.serial.clone(),
@@ -159,7 +160,8 @@ pub async fn test(command: TestCommand) -> anyhow::Result<()> {
         runtime_config.serial.baud_rate,
     );
 
-    let connect_deadline = Instant::now() + Duration::from_millis(command.connect_timeout_ms.max(1));
+    let connect_deadline =
+        Instant::now() + Duration::from_millis(command.connect_timeout_ms.max(1));
     loop {
         match transport.try_connect().await {
             Ok(()) => break,
@@ -189,8 +191,10 @@ pub async fn test(command: TestCommand) -> anyhow::Result<()> {
 
     exchange_with_trace(&mut transport, "get-status:init", Command::GetStatus).await?;
 
-    let step_duration = Duration::from_millis(command.step_duration_ms.max(1));
-    let desired_timeout_ms = (step_duration.as_millis().saturating_mul(3)).max(250) as u32;
+    let motion_duration = Duration::from_secs(5);
+    let pause_duration = Duration::from_secs(5);
+    let emit_interval = Duration::from_millis(command.step_duration_ms.max(1));
+    let desired_timeout_ms = (emit_interval.as_millis().saturating_mul(3)).max(250) as u32;
     exchange_with_trace(
         &mut transport,
         "set-link-timeout",
@@ -203,11 +207,9 @@ pub async fn test(command: TestCommand) -> anyhow::Result<()> {
         .drive_speed
         .min(router.limits.max_drive_pwm.0 as u16)
         .max(1);
-    let half_turn = DriveIntent::AXIS_MAX / 2;
-    let quarter_turn = DriveIntent::AXIS_MAX / 4;
-    let script: [(&str, Option<DriveIntent>); 10] = [
+    let script: [(&str, Option<DriveIntent>); 4] = [
         (
-            "up",
+            "move forward",
             Some(DriveIntent {
                 forward: DriveIntent::AXIS_MAX,
                 turn: 0,
@@ -215,7 +217,7 @@ pub async fn test(command: TestCommand) -> anyhow::Result<()> {
             }),
         ),
         (
-            "down",
+            "move backward",
             Some(DriveIntent {
                 forward: -DriveIntent::AXIS_MAX,
                 turn: 0,
@@ -223,7 +225,7 @@ pub async fn test(command: TestCommand) -> anyhow::Result<()> {
             }),
         ),
         (
-            "left",
+            "move left",
             Some(DriveIntent {
                 forward: 0,
                 turn: -DriveIntent::AXIS_MAX,
@@ -231,78 +233,46 @@ pub async fn test(command: TestCommand) -> anyhow::Result<()> {
             }),
         ),
         (
-            "right",
+            "move right",
             Some(DriveIntent {
                 forward: 0,
                 turn: DriveIntent::AXIS_MAX,
                 speed,
             }),
         ),
-        (
-            "top-left",
-            Some(DriveIntent {
-                forward: DriveIntent::AXIS_MAX,
-                turn: -half_turn,
-                speed,
-            }),
-        ),
-        (
-            "top-right",
-            Some(DriveIntent {
-                forward: DriveIntent::AXIS_MAX,
-                turn: half_turn,
-                speed,
-            }),
-        ),
-        (
-            "bottom-left",
-            Some(DriveIntent {
-                forward: -DriveIntent::AXIS_MAX,
-                turn: -half_turn,
-                speed,
-            }),
-        ),
-        (
-            "bottom-right",
-            Some(DriveIntent {
-                forward: -DriveIntent::AXIS_MAX,
-                turn: half_turn,
-                speed,
-            }),
-        ),
-        (
-            "pivot-left",
-            Some(DriveIntent {
-                forward: 0,
-                turn: -quarter_turn,
-                speed,
-            }),
-        ),
-        (
-            "pivot-right",
-            Some(DriveIntent {
-                forward: 0,
-                turn: quarter_turn,
-                speed,
-            }),
-        ),
     ];
 
     println!(
-        "test: running {} motor steps at speed={} step_duration_ms={}",
+        "test: running {} motor steps at speed={} emit_interval_ms={} motion_duration_s={} pause_duration_s={}",
         script.len(),
         speed,
-        step_duration.as_millis()
+        emit_interval.as_millis(),
+        motion_duration.as_secs(),
+        pause_duration.as_secs()
     );
 
     for (name, intent) in script {
-        let command = router.desired_state_command(
-            Mode::Teleop,
+        println!("test: {name}");
+        run_motion_state(
+            &mut transport,
+            &router,
+            name,
             intent,
-            RouterPolicy::centered_servo(),
-        );
-        exchange_with_trace(&mut transport, name, command).await?;
-        tokio::time::sleep(step_duration).await;
+            motion_duration,
+            emit_interval,
+        )
+        .await?;
+
+        println!("test: sleep 5 seconds");
+        run_motion_state(
+            &mut transport,
+            &router,
+            "sleep",
+            None,
+            pause_duration,
+            emit_interval,
+        )
+        .await?;
     }
 
     exchange_with_trace(
@@ -325,6 +295,33 @@ async fn exchange_with_trace(
     println!("tx[{label}]: {:?}", command);
     let telemetry = transport.exchange_command(command).await?;
     println!("rx[{label}]: {:?}", telemetry);
+    Ok(())
+}
+
+async fn run_motion_state(
+    transport: &mut BrainTransport,
+    router: &RouterPolicy,
+    label: &str,
+    intent: Option<DriveIntent>,
+    duration: Duration,
+    emit_interval: Duration,
+) -> anyhow::Result<()> {
+    let deadline = Instant::now() + duration;
+    let mut tick = 0usize;
+
+    while Instant::now() < deadline {
+        tick += 1;
+        let command =
+            router.desired_state_command(Mode::Teleop, intent, RouterPolicy::centered_servo());
+        exchange_with_trace(transport, &format!("{label}:{tick}"), command).await?;
+
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+        tokio::time::sleep(remaining.min(emit_interval)).await;
+    }
+
     Ok(())
 }
 

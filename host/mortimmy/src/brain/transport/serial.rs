@@ -344,7 +344,9 @@ mod tests {
     use mortimmy_protocol::messages::{
         command::Command,
         commands::{DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand},
-        telemetry::{ControllerCapabilities, ControllerRole, StatusTelemetry},
+        telemetry::{
+            ControllerCapabilities, ControllerRole, ForwardRangeTelemetry, StatusTelemetry,
+        },
     };
 
     use super::{controller_accepts_command, duplicate_controller_role};
@@ -360,7 +362,7 @@ mod tests {
                 uptime_ms: 0,
                 link_quality: 100,
                 error: None,
-                range: None,
+                ranges: ForwardRangeTelemetry::default(),
             },
         }
     }

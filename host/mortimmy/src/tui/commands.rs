@@ -141,7 +141,9 @@ pub fn help_text(topic: Option<&str>) -> String {
     lines.push("Notes:".to_string());
     lines.push("  Commands must start with /.".to_string());
     lines.push("  Bare input is treated as /chat <prompt>.".to_string());
-    lines.push("  Use /drive to enter modal keyboard driving; press Esc or q to return.".to_string());
+    lines.push(
+        "  Use /drive to enter modal keyboard driving; press Esc or q to return.".to_string(),
+    );
     lines.push("  Use @filename inside /chat to inline file contents into the prompt.".to_string());
     lines.push(
         "  Press Tab to autocomplete commands, subcommands, and @file references.".to_string(),

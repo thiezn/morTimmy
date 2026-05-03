@@ -40,7 +40,15 @@ pub fn suggestions(input: &str, cursor: usize, files: &FileIndex) -> Vec<Suggest
     if first_token.starts_with('/') && tokens_before_current == 1 {
         match command_name.as_str() {
             "help" => return command_name_suggestions(token, start, end),
-            "mode" => return fixed_value_suggestions(commands::mode_names(), token, start, end, "mode value"),
+            "mode" => {
+                return fixed_value_suggestions(
+                    commands::mode_names(),
+                    token,
+                    start,
+                    end,
+                    "mode value",
+                );
+            }
             _ => {}
         }
     }
@@ -157,7 +165,11 @@ mod tests {
     #[test]
     fn suggests_slash_commands_from_first_token() {
         let suggestions = suggestions("/he", 3, &FileIndex::default());
-        assert!(suggestions.iter().any(|suggestion| suggestion.label == "/help"));
+        assert!(
+            suggestions
+                .iter()
+                .any(|suggestion| suggestion.label == "/help")
+        );
     }
 
     #[test]
@@ -165,10 +177,18 @@ mod tests {
         let file_index = FileIndex::default();
 
         let help_suggestions = suggestions("/help mo", 8, &file_index);
-        assert!(help_suggestions.iter().any(|suggestion| suggestion.label == "/mode"));
+        assert!(
+            help_suggestions
+                .iter()
+                .any(|suggestion| suggestion.label == "/mode")
+        );
 
         let mode_suggestions = suggestions("/mode au", 8, &file_index);
-        assert!(mode_suggestions.iter().any(|suggestion| suggestion.label == "autonomous"));
+        assert!(
+            mode_suggestions
+                .iter()
+                .any(|suggestion| suggestion.label == "autonomous")
+        );
     }
 
     #[test]

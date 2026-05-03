@@ -12,7 +12,8 @@ pub use self::commands::{
 };
 pub use self::telemetry::{
     AudioStatusTelemetry, BatteryTelemetry, ControllerCapabilities, ControllerRole,
-    DesiredStateTelemetry, MotorStateTelemetry, PadEventKind, RangeTelemetry, ServoStateTelemetry,
-    StatusTelemetry, TRELLIS_PAD_COUNT, Telemetry, TrellisPadTelemetry,
+    DesiredStateTelemetry, ForwardRangeTelemetry, MotorStateTelemetry, PadEventKind,
+    RangeSensorPosition, RangeTelemetry, ServoStateTelemetry, StatusTelemetry,
+    TRELLIS_PAD_COUNT, Telemetry, TrellisPadTelemetry,
 };
 pub use self::wire::WireMessage;

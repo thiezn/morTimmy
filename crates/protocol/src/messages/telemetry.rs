@@ -17,7 +17,7 @@ pub use self::battery::BatteryTelemetry;
 pub use self::capabilities::{ControllerCapabilities, ControllerRole};
 pub use self::desired_state::DesiredStateTelemetry;
 pub use self::drive::MotorStateTelemetry;
-pub use self::range::RangeTelemetry;
+pub use self::range::{ForwardRangeTelemetry, RangeSensorPosition, RangeTelemetry};
 pub use self::servo::ServoStateTelemetry;
 pub use self::status::StatusTelemetry;
 pub use self::trellis_pad::{PadEventKind, TRELLIS_PAD_COUNT, TrellisPadTelemetry};

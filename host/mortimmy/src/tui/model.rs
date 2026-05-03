@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, VecDeque};
 
 use mortimmy_core::Mode;
-use mortimmy_protocol::messages::telemetry::RangeTelemetry;
+use mortimmy_protocol::messages::telemetry::ForwardRangeTelemetry;
 
 use crate::{
     config::LogLevel,
@@ -11,7 +11,7 @@ use crate::{
 use super::completion::Suggestion;
 
 pub const MAX_LOG_MESSAGES: usize = 200;
-pub const KEYBOARD_DRIVE_SPEED: u16 = 300;
+pub const KEYBOARD_DRIVE_SPEED: u16 = 700;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum KeyboardDriveStyle {
@@ -139,7 +139,12 @@ impl KeyboardDriveState {
             _ => return false,
         }
 
-        let previous = (self.forward_axis, self.turn_axis, self.left_track, self.right_track);
+        let previous = (
+            self.forward_axis,
+            self.turn_axis,
+            self.left_track,
+            self.right_track,
+        );
 
         if self.space_down {
             self.forward_axis = 0;
@@ -151,7 +156,13 @@ impl KeyboardDriveState {
         self.left_track = 0;
         self.right_track = 0;
 
-        previous != (self.forward_axis, self.turn_axis, self.left_track, self.right_track)
+        previous
+            != (
+                self.forward_axis,
+                self.turn_axis,
+                self.left_track,
+                self.right_track,
+            )
     }
 
     fn apply_tank_key_state(&mut self, key: char, is_down: bool) -> bool {
@@ -164,7 +175,12 @@ impl KeyboardDriveState {
             _ => return false,
         }
 
-        let previous = (self.forward_axis, self.turn_axis, self.left_track, self.right_track);
+        let previous = (
+            self.forward_axis,
+            self.turn_axis,
+            self.left_track,
+            self.right_track,
+        );
 
         let (left_track, right_track) = if self.space_down {
             (0, 0)
@@ -180,7 +196,13 @@ impl KeyboardDriveState {
         self.left_track = left_track;
         self.right_track = right_track;
 
-        previous != (self.forward_axis, self.turn_axis, self.left_track, self.right_track)
+        previous
+            != (
+                self.forward_axis,
+                self.turn_axis,
+                self.left_track,
+                self.right_track,
+            )
     }
 }
 
@@ -231,7 +253,7 @@ pub struct SummaryStatus {
     pub connection_status: String,
     pub control_state: ControlState,
     pub desired_mode: Mode,
-    pub distance: Option<RangeTelemetry>,
+    pub ranges: ForwardRangeTelemetry,
     pub transport_label: String,
     pub serial_target: String,
     pub nexo_gateway: String,
@@ -247,7 +269,7 @@ impl Default for SummaryStatus {
             connection_status: "connecting".to_string(),
             control_state: ControlState::default(),
             desired_mode: Mode::Teleop,
-            distance: None,
+            ranges: ForwardRangeTelemetry::default(),
             transport_label: String::new(),
             serial_target: String::new(),
             nexo_gateway: String::new(),
