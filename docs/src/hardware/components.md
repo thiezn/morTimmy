@@ -21,6 +21,8 @@ This section collects the concrete hardware parts currently used or evaluated fo
 ## Actuation
 
 - [L298N Stepper / Motor Driver](components/l298n-stepper-motor-driver/index.md): dual H-bridge driver board used for wheel motors.
+- [Motors](components/motors/index.md): current DC motor models used for the prototype.
+- [Servos](components/servos/index.md): planned pan / tilt servo models for the head module.
 
 ## Notes
 

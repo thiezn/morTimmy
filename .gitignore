@@ -3,7 +3,7 @@
 .github/skills/tscircuit
 
 # History of kicad
-mortimmy/.history/
+schematics/kicad/.history/
 
 # Ignore python .pyc library files
 *.pyc
