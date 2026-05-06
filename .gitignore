@@ -2,6 +2,9 @@
 .claude/settings.local.json
 .github/skills/tscircuit
 
+# History of kicad
+mortimmy/.history/
+
 # Ignore python .pyc library files
 *.pyc
 *.swp
