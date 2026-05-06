@@ -2,46 +2,72 @@
 
 The robot wiring diagram is generated from the WireViz source in `schematics/wiring/mortimmy.yml`.
 
-The tables below distinguish between the pins that are already bound in firmware and the planned full hardware end state. The motion-controller motor, ultrasonic, and LCD mappings are implemented today; the servo and Audio Pack sections document the remaining next wiring target so the diagram and notes stay aligned.
+The tables below separate the firmware-backed motion-controller wiring from the reserved servo pins that are not bound in firmware yet. The TB6612FNG motor allocation, ultrasonic pair, and LCD mappings are already fixed in the current design.
 
 ## Motion controller wiring
 
-The motion-controller firmware image targets the Pimoroni Pico LiPo 2 and binds the motor, ultrasonic, and LCD wiring directly in [firmware/rp2350/src/runtime/motion.rs](../../../firmware/rp2350/src/runtime/motion.rs). The generated diagram below should stay in sync with that firmware pin map.
+The motion-controller firmware image targets the Pimoroni Pico LiPo 2 and binds the motor, ultrasonic, and LCD wiring directly in [firmware/rp2350/src/runtime/motion.rs](../../../firmware/rp2350/src/runtime/motion.rs). The current code still names the motor backend after the older L298N driver, but the active GPIO allocation already matches one TB6612FNG stage per side on the PDB. The Pico reaches those driver stages through the 14-pin control harness described in [PCB designs](pcb.md), and the generated diagram below should stay in sync with that firmware pin map.
 
-### L298N control wiring
+### Pico 2 power and USB link
 
-Left motor-driver board:
+The PCB design uses a Raspberry Pi Pico 2 module on the control board. Power it from the board `AUX_5V` rail into the Pico `VSYS` pin through a reverse-blocking ideal-diode stage. Do not feed the Pico from the control-board `3V3` rail, and do not tie `AUX_5V` directly to the Pico `VBUS` pin.
 
-| Pico LiPo 2 pin | Firmware role | L298N pin | Notes |
+Keep the Raspberry Pi 3B connection as a native USB device link on the Pico USB connector:
+
+- USB `D+` and `D-` carry the actual Pi to Pico communication.
+- USB `GND` and shield remain bonded through the cable.
+- Host `VBUS` from the Pi USB port still reaches the Pico USB connector so the Pico sees USB attach and supports normal programming.
+- The reverse-blocking `AUX_5V` to `VSYS` path prevents that host `VBUS` from backfeeding the board `AUX_5V` rail.
+
+No extra UART is required for normal Pi 3B communication or programming. Add SWD only if you want board-level debug access.
+
+### TB6612FNG control wiring
+
+Per side, the current firmware still uses six motor-control signals: two PWM outputs and four direction pins. That maps directly onto `PWMA`, `AIN1`, `AIN2`, `BIN1`, `BIN2`, and `PWMB`, so the TB6612FNG interface does not need a new Pico GPIO because `STBY` is pulled high locally on the PDB.
+
+Left motor-driver stage:
+
+| Pico LiPo 2 pin | Firmware role | TB6612FNG pin | Notes |
 | --- | --- | --- | --- |
-| GP2 | PWM slice 1 A | ENA | Front-left channel enable |
-| GP3 | GPIO output | IN1 | Front-left direction A |
-| GP4 | GPIO output | IN2 | Front-left direction B |
-| GP5 | GPIO output | IN3 | Rear-left direction A |
-| GP6 | GPIO output | IN4 | Rear-left direction B |
-| GP7 | PWM slice 3 B | ENB | Rear-left channel enable |
+| GP2 | PWM slice 1 A | PWMA | Front-left speed command |
+| GP3 | GPIO output | AIN1 | Front-left direction A |
+| GP4 | GPIO output | AIN2 | Front-left direction B |
+| GP5 | GPIO output | BIN1 | Rear-left direction A |
+| GP6 | GPIO output | BIN2 | Rear-left direction B |
+| GP7 | PWM slice 3 B | PWMB | Rear-left speed command |
 | GND | Common ground | GND | Required reference between Pico and driver |
 
-Right motor-driver board:
+Right motor-driver stage:
 
-| Pico LiPo 2 pin | Firmware role | L298N pin | Notes |
+| Pico LiPo 2 pin | Firmware role | TB6612FNG pin | Notes |
 | --- | --- | --- | --- |
-| GP8 | PWM slice 4 A | ENA | Front-right channel enable |
-| GP9 | GPIO output | IN1 | Front-right direction A |
-| GP10 | GPIO output | IN2 | Front-right direction B |
-| GP11 | GPIO output | IN3 | Rear-right direction A |
-| GP12 | GPIO output | IN4 | Rear-right direction B |
-| GP13 | PWM slice 6 B | ENB | Rear-right channel enable |
+| GP8 | PWM slice 4 A | PWMA | Front-right speed command |
+| GP9 | GPIO output | AIN1 | Front-right direction A |
+| GP10 | GPIO output | AIN2 | Front-right direction B |
+| GP11 | GPIO output | BIN1 | Rear-right direction A |
+| GP12 | GPIO output | BIN2 | Rear-right direction B |
+| GP13 | PWM slice 6 B | PWMB | Rear-right speed command |
 | GND | Common ground | GND | Required reference between Pico and driver |
+
+These 12 control signals plus two ground references form the 14-pin board-to-board harness between the control board and the PDB.
+
+Local support wiring:
+
+| Support net | TB6612FNG pin | Notes |
+| --- | --- | --- |
+| PDB local `DRV_3V3` rail | VCC | Local motor-driver logic supply on the PDB |
+| `DRV_3V3` via local pull-up on the PDB | STBY | Hold high to enable the bridges; expose a test pad or solder jumper on the PDB for bring-up and fault isolation |
+| Motor rail | VM | Feed from the dedicated motor power path; do not assume raw 2S is safe for nominal 6 V motors |
+| GND | GND | Shared reference between Pico, driver stage, and motor power return |
 
 Motor outputs:
 
-| Driver board | Output pair | Motor |
+| Driver stage | Output pair | Motor |
 | --- | --- | --- |
-| Left L298N | MotorA +/- | Front-left motor |
-| Left L298N | MotorB +/- | Rear-left motor |
-| Right L298N | MotorA +/- | Front-right motor |
-| Right L298N | MotorB +/- | Rear-right motor |
+| Left TB6612FNG | A01 / A02 | Front-left motor |
+| Left TB6612FNG | B01 / B02 | Rear-left motor |
+| Right TB6612FNG | A01 / A02 | Front-right motor |
+| Right TB6612FNG | B01 / B02 | Rear-right motor |
 
 ### HC-SR04 wiring
 
@@ -49,10 +75,10 @@ The wiring plan uses two HC-SR04 modules mounted forward-left and forward-right 
 
 Shared rails:
 
-| Pico LiPo 2 pin | Level converter pin | HC-SR04 pin | Notes |
+| Control-board source | Level converter pin | HC-SR04 pin | Notes |
 | --- | --- | --- | --- |
 | 3V3 OUT (The + pin on our Pico) | LV | - | Required low-side reference for the BSS138 board |
-| VBUS / 5V | HV | VCC on both sensors | High-side reference rail and shared sensor supply |
+| `5V_FILT` | HV | VCC on both sensors | Filtered 5 V rail for the HC-SR04 pair |
 | GND | GND | GND on both sensors | Shared logic ground across Pico, converter, and both sensors |
 
 Forward-left sensor:
@@ -82,13 +108,13 @@ The firmware polls the two sensors sequentially rather than simultaneously so on
 
 ### LCD1602 wiring
 
-Yes. After the motor controller claims `GP2` through `GP17` and the servo plan keeps `GP18` and `GP19` reserved, the Pico LiPo 2 still has exactly six free GPIO: `GP20`, `GP21`, `GP22`, `GP26`, `GP27`, and `GP28`. That is enough for the LCD in 4-bit write-only mode, so the display can live on the motion-controller Pico without colliding with the Audio Pack.
+Because the TB6612FNG `STBY` signal is handled locally on the PDB rather than by an extra GPIO, the motor section still claims only `GP2` through `GP17` and the servo plan keeps `GP18` and `GP19` reserved. The Pico LiPo 2 still has exactly six free GPIO: `GP20`, `GP21`, `GP22`, `GP26`, `GP27`, and `GP28`. That is enough for the LCD in 4-bit write-only mode, so the display can live on the motion-controller Pico without colliding with the Audio Pack.
 
 Main LCD data and control wiring:
 
-| Pico LiPo 2 pin | LCD pin | Notes |
+| Control-board source / Pico GPIO | LCD pin | Notes |
 | --- | --- | --- |
-| VBUS / 5V | VDD | LCD logic supply |
+| `5V_FILT` | VDD | Filtered 5 V logic supply |
 | GND | VSS | Common ground |
 | GP20 | RS | Command or data select |
 | GP21 | E | Enable strobe |
@@ -103,7 +129,7 @@ Supporting LCD wiring:
 | --- | --- | --- |
 | Contrast potentiometer wiper | VO | 10 kOhm trimmer between 5 V and ground |
 | Ground | RW | Tied low for write-only mode |
-| 5V through onboard or external resistor | LEDA | Backlight anode |
+| `5V_FILT` through onboard or external resistor | LEDA | Backlight anode |
 | Ground | LEDK | Backlight cathode |
 
 This uses the last six free motion-controller GPIO after the servo reservation, so there is no extra GPIO headroom left on that Pico once the LCD is wired.
@@ -114,7 +140,7 @@ The desired full end state keeps the two hobby servos on the motion controller, 
 
 Servo signal wiring:
 
-| Pico LiPo 2 pin | Planned role | Servo lead | Notes |
+| Pico LiPo 2 pin | Reserved role | Servo lead | Notes |
 | --- | --- | --- | --- |
 | GP18 | PWM output | Pan servo signal | First free GPIO after the HC-SR04 pair; reserved for the pan axis |
 | GP19 | PWM output | Tilt servo signal | Adjacent free GPIO reserved for the tilt axis |
@@ -127,11 +153,11 @@ Servo power wiring:
 | Dedicated 6 V servo rail | V+ on both servos | Keep servo surge current off the 5 V logic rail |
 | Shared ground | GND on both servos | Join the servo rail return and the Pico ground at the same reference |
 
-The `board-motion-controller` firmware image does not bind `GP18` or `GP19` yet. These pins are reserved here as the planned pan / tilt end state so the already-working motor and ultrasonic wiring can remain stable while the servo runtime is added.
+The `board-motion-controller` firmware image does not bind `GP18` or `GP19` yet. These pins remain reserved for the chosen pan / tilt hardware end state so the already-working motor and ultrasonic wiring can remain stable while the servo runtime is added.
 
 ### motion-controller scope
 
-The `board-motion-controller` firmware image owns L298N motor control, HC-SR04 ranging, and the local HD44780 LCD status display. Battery sensing is tracked separately and should not be wired back into the motion-controller capability set until the Pico LiPo 2 ADC path is verified. The `GP18` / `GP19` servo reservation above is the next hardware step, but those pins should stay electrically idle until the servo runtime is added.
+The `board-motion-controller` firmware image owns wheel-motor control through the TB6612-compatible `GP2` through `GP13` interface, HC-SR04 ranging, and the local HD44780 LCD status display. Battery sensing is tracked separately and should not be wired back into the motion-controller capability set until the Pico LiPo 2 ADC path is verified. The `GP18` / `GP19` servo reservation above is the next hardware step, but those pins should stay electrically idle until the servo runtime is added.
 
 ## Audio controller wiring
 

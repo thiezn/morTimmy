@@ -32,22 +32,26 @@ Each layer may evolve independently as long as **power interfaces and signal con
 
 The system uses **a single battery source with centralized power distribution**, implemented through a dedicated **Power Distribution Board (PDB)**
 
-All voltage regulation, protection, and branching occurs on this board.  
-No downstream module is allowed to create or cascade its own primary supply unless explicitly required.
+All primary system rails originate on this board.  
+The only local conversion off-board is the Pico 2 onboard 3.3 V regulator, used only for control-board logic.
+
+The control board feeds the Pico 2 at `VSYS` from `AUX_5V` through a reverse-blocking ideal-diode path. The Pi 3B still reaches the Pico over the Pico USB connector for programming and runtime communication.
 
 ### Power Topology
 
-    Battery Pack (single source)
+    Battery Pack (2S single source)
     │
-    ├── High‑current rail (raw or bucked)
-    │   └── Motor Drivers (L298N or future replacements)
+    ├── Protected raw rail (`MOTOR_VM`)
+    │   └── Two TB6612FNG motor-driver stages on the PDB
     │
-    ├── Medium‑current rail (6V)
+    ├── Medium‑current rail (`SERVO_6V`)
     │   └── Servo connectors
     │
     └── Logic rails
-        ├── 5V → Raspberry Pi, USB devices, audio modules
-        └── 3.3V → Microcontrollers, sensors
+        ├── `PI_5V` → Raspberry Pi
+        ├── `AUX_5V` → Control board `VSYS` feed and 5 V loads
+        ├── `DRV_3V3` → PDB-local TB6612 logic
+        └── Pico `3V3` → Control-board MCU and level shifting
 
 ### Rail Separation Rationale
 
@@ -76,16 +80,17 @@ It has no compute logic and performs no signaling functions beyond power deliver
 
 ### Typical Components on the PDB
 
-*   Battery connector (XT30 / XT60)
+*   Battery connector (JST-VH in the current board plan)
 *   Main fuse
+*   Master power switch
 *   Reverse polarity protection (MOSFET or diode)
-*   Buck converters:
-    *   Battery → 6V (servos)
-    *   Battery → 5V (logic)
-    *   5V → 3.3V (logic, if not buck‑derived)
-*   Bulk capacitors near each rail
+*   5.1 V buck converter for `PI_5V` and `AUX_5V`
+*   6.0 V buck converter for `SERVO_6V`
+*   Local 3.3 V regulator for TB6612FNG `VCC` and `STBY`
+*   Two TB6612FNG stages on the PDB beside the wheel-motor connectors
+*   Bulk capacitors near the battery entry, the 5.1 V rail, the 6.0 V rail, and each TB6612FNG stage
 *   Measurement points for each rail
-*   Ground plane with star‑ground topology
+*   Ground plane with controlled high-current return paths and stitching vias around the driver region
 
 
 ## 4. System Architecture
@@ -100,16 +105,18 @@ It has no compute logic and performs no signaling functions beyond power deliver
                         │─────────────────────│
                         │ • Fuse              │
                         │ • Polarity protect  │
+                        │ • TB6612FNG x2      │
                         │ • 6V Buck (Servos)  │
-                        │ • 5V Buck (Logic)   │
-                        │ • 3.3V Regulator    │
+                        │ • 5.1V Buck         │
+                        │ • DRV_3V3 Regulator │
                         │ • Central Ground    │
                         └───┬────────┬─────┬─┘
                             │        │     │
-                   ┌────────▼───┐    │     │
-                   │ Motor Ctrl  │    │     │
-                   │ Pico        │    │     │
-                   └────────────┘    │     │
+                    ┌───────▼──────┐ │     │
+                    │ Control Board│ │     │
+                    │ Pico + LCD + │ │     │
+                    │ US + USB dev │ │     │
+                    └──────────────┘ │     │
                                      │     │
                              ┌───────▼┐ ┌──▼─────────┐
                              │ Servos │ │ Raspberry  │
@@ -125,17 +132,22 @@ All components connect **inwards** to the power system rather than chaining powe
                         │
                     [ Main Fuse ]
                         │
+                   [ Master Switch ]
+                        │
                [ Reverse Polarity Protection ]
                         │
-                ┌────────┼─────────┐
-                │        │         │
-            [Buck]   [Buck]    [Buck/LDO]
-            Batt→Motor Batt→6V   5V→3V3
-                │        │         │
-             Motor     Servo      Logic
-             Rail      Rail       Rail
-                │        │         │
-          Motor Drivers  Servos    MCUs + Sensors
+                ┌────────┼──────────────┬──────────────┐
+                │        │              │              │
+          `MOTOR_VM`  [Buck 5.1V]   [Buck 6.0V]   [Reg 3.3V]
+                │        │              │              │
+         TB6612FNG x2  `PI_5V` +     Servo Rail    `DRV_3V3`
+                    │       `AUX_5V`         │              │
+            Wheel Motors  │            Servos      TB6612 VCC/STBY
+                          │
+                  Raspberry Pi + Control Board
+                          │
+                    `AUX_5V` -> ideal diode -> Pico `VSYS`
+                    USB `D+`/`D-`/`VBUS` -> Pico USB connector
 
 ### Grounding Strategy
 
@@ -150,6 +162,8 @@ All components connect **inwards** to the power system rather than chaining powe
 ### Power and Data Separation
 
 Power delivery and data signaling are always routed separately except where standards require otherwise (e.g. servo headers).
+
+For the motion controller, keep USB as the primary Pi 3B to Pico 2 interface. The control board powers the Pico from `AUX_5V` into `VSYS`, while the Pi USB host connection still carries `D+`, `D-`, `GND`, shield, and host `VBUS` to the Pico USB connector for attach detect and programming.
 
 ### Data Buses
 
@@ -207,8 +221,7 @@ These rules define the system’s long‑term robustness.
 | **Dupont Wires**             | Temporary jumper wires used only during prototyping          |
 | **Servo**                    | Actuator with control + power combined in a 3‑wire interface |
 | **Motor Driver**             | High‑current interface between logic signals and motors      |
-| **XT30 / XT60**              | High‑current battery connectors                              |
-| **JST Connectors**           | Compact connectors for low‑power logic                       |
+| **JST-VH / JST-XH**          | Board and harness connectors used for power and signal wiring |
 | **Power Distribution Board** | Dedicated PCB handling all system power                      |
 | **Data Bus**                 | Shared signaling interface between devices                   |
 

@@ -9,20 +9,20 @@ This section collects the concrete hardware parts currently used or evaluated fo
 
 ## Power
 
-- [Power System](components/power/index.md): current battery and regulator arrangement for the prototype.
+- [Power System](components/power/index.md): finalized 2S battery, protection, and rail-generation plan for the power distribution board.
 
 ## Sensors and user interface
 
 - [HC-SR04 Ultrasonic Sensor](components/hc-sr04/index.md): forward distance sensing.
 - Adafruit 4-channel I2C-safe Bi-directional Logic Level Converter (BSS138): shared 3.3 V to 5 V signal translation for HC-SR04 TRIG/ECHO lines and future open-drain peripherals.
 - [Liquid Crystal Display](components/liquid-crystal-display/index.md): 16x2 character display for local status output.
-- [Trellis M4 4x4](components/trellis-m4-4x4/index.md): keypad and LED matrix for future local interaction.
 
 ## Actuation
 
-- [L298N Stepper / Motor Driver](components/l298n-stepper-motor-driver/index.md): dual H-bridge driver board used for wheel motors.
+- [TB6612FNG Motor Driver](components/TB6612FNG%20motor%20driver/index.md): dual MOSFET H-bridge used for the left and right wheel-drive stages on the PDB.
+- [L298N Stepper / Motor Driver](components/l298n-stepper-motor-driver/index.md): earlier prototype driver board kept for historical reference.
 - [Motors](components/motors/index.md): current DC motor models used for the prototype.
-- [Servos](components/servos/index.md): planned pan / tilt servo models for the head module.
+- [Servos](components/servos/index.md): pan / tilt servo interface and power plan for the control board.
 
 ## Notes
 

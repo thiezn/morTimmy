@@ -54,7 +54,7 @@ connectors:
   PICO_CTRL_LCD:
     pinlabels:
       [
-        "VBUS P40 5V",
+        "5V_FILT",
         "GP20 P26 RS",
         "GP21 P27 E",
         "GP22 P29 D4",
@@ -66,22 +66,27 @@ connectors:
     type: Pico LiPo 2
     subtype: LCD GPIO
     notes: These are the six remaining free GPIO once motors, the HC-SR04 pair, and
-      the planned GP18 and GP19 servo outputs are reserved.
+      the reserved GP18 and GP19 servo outputs are accounted for. The LCD 5 V
+      supply shown here is the control-board `5V_FILT` rail, not Pico USB
+      `VBUS`.
 
   PICO_CTRL_USB:
     pinlabels: [ "VBUS", "D-", "D+", "GND", "SHELL" ]
     type: Pico LiPo 2
     subtype: USB device
+    notes: USB link to the Raspberry Pi 3B. Host `VBUS` stays on the USB connector
+      for attach detect and programming, but the PCB powers the Pico from
+      `AUX_5V` into `VSYS` through a reverse-blocking ideal-diode path.
 
   PICO_CTRL_LEFT:
     pinlabels:
       [
-        "GP2 P4 ENA",
-        "GP3 P5 IN1",
-        "GP4 P7 IN2",
-        "GP5 P8 IN3",
-        "GP6 P10 IN4",
-        "GP7 P11 ENB",
+        "GP2 P4 PWMA",
+        "GP3 P5 AIN1",
+        "GP4 P7 AIN2",
+        "GP5 P8 BIN1",
+        "GP6 P10 BIN2",
+        "GP7 P11 PWMB",
         "GND P9",
       ]
     type: Pico LiPo 2
@@ -90,12 +95,12 @@ connectors:
   PICO_CTRL_RIGHT:
     pinlabels:
       [
-        "GP8 P12 ENA",
-        "GP9 P13 IN1",
-        "GP10 P14 IN2",
-        "GP11 P15 IN3",
-        "GP12 P16 IN4",
-        "GP13 P17 ENB",
+        "GP8 P12 PWMA",
+        "GP9 P13 AIN1",
+        "GP10 P14 AIN2",
+        "GP11 P15 BIN1",
+        "GP12 P16 BIN2",
+        "GP13 P17 PWMB",
         "GND P18",
       ]
     type: Pico LiPo 2
@@ -105,7 +110,7 @@ connectors:
     pinlabels:
       [
         "3V3 OUT",
-        "VBUS P40 5V",
+        "5V_FILT",
         "GP14 P19 TRIG_LEFT",
         "GP15 P20 ECHO_LEFT",
         "GP16 P21 TRIG_RIGHT",
@@ -114,44 +119,52 @@ connectors:
       ]
     type: Pico LiPo 2
     subtype: ultrasonic GPIO
-    notes: Two HC-SR04 modules share one 4-channel BSS138 level shifter.
+    notes: Two HC-SR04 modules share one 4-channel BSS138 level shifter. The sensor
+      `HV` rail is the control-board `5V_FILT` net.
 
   PICO_CTRL_SERVO:
     pinlabels: [ "GP18 P25 PAN_PWM", "GP19 P26 TILT_PWM", "GND P24" ]
     type: Pico LiPo 2
-    subtype: planned pan / tilt servo GPIO
-    notes: Reserved end-state servo PWM outputs. Not yet bound in motion-controller
+    subtype: reserved pan / tilt servo GPIO
+    notes: Reserved hardware servo PWM outputs. Not yet bound in motion-controller
       firmware.
 
-  DRV_LEFT_CTRL:
-    pinlabels: [ "ENA", "IN1", "IN2", "IN3", "IN4", "ENB", "GND" ]
-    type: L298N dual H-bridge
+  TB_LEFT_CTRL:
+    pinlabels: [ "PWMA", "AIN1", "AIN2", "BIN1", "BIN2", "PWMB", "GND" ]
+    type: TB6612FNG dual motor driver
     subtype: left control
-    notes: Check 3.3 V GPIO compatibility.
+    notes: One TB6612FNG stage drives the front-left and rear-left motors. VCC and
+      STBY stay local on the PDB driver-logic rail.
 
-  DRV_LEFT_PWR:
-    pinlabels: [ "VMS", "GND", "5V" ]
-    type: L298N dual H-bridge
+  TB_LEFT_PWR:
+    pinlabels: [ "VM", "GND" ]
+    type: TB6612FNG dual motor driver
     subtype: left power
+    notes: Motor supply only. VM is the protected raw motor rail. VCC and STBY are
+      generated locally on the PDB.
 
-  DRV_LEFT_OUT:
-    pinlabels: [ "MOTORA+", "MOTORA-", "MOTORB+", "MOTORB-" ]
-    type: L298N dual H-bridge
+  TB_LEFT_OUT:
+    pinlabels: [ "A01", "A02", "B01", "B02" ]
+    type: TB6612FNG dual motor driver
     subtype: left outputs
 
-  DRV_RIGHT_CTRL:
-    pinlabels: [ "ENA", "IN1", "IN2", "IN3", "IN4", "ENB", "GND" ]
-    type: L298N dual H-bridge
+  TB_RIGHT_CTRL:
+    pinlabels: [ "PWMA", "AIN1", "AIN2", "BIN1", "BIN2", "PWMB", "GND" ]
+    type: TB6612FNG dual motor driver
     subtype: right control
+    notes: One TB6612FNG stage drives the front-right and rear-right motors. VCC and
+      STBY stay local on the PDB driver-logic rail.
 
-  DRV_RIGHT_PWR:
-    pinlabels: [ "VMS", "GND", "5V" ]
-    type: L298N dual H-bridge
+  TB_RIGHT_PWR:
+    pinlabels: [ "VM", "GND" ]
+    type: TB6612FNG dual motor driver
     subtype: right power
+    notes: Motor supply only. VM is the protected raw motor rail. VCC and STBY are
+      generated locally on the PDB.
 
-  DRV_RIGHT_OUT:
-    pinlabels: [ "MOTORA+", "MOTORA-", "MOTORB+", "MOTORB-" ]
-    type: L298N dual H-bridge
+  TB_RIGHT_OUT:
+    pinlabels: [ "A01", "A02", "B01", "B02" ]
+    type: TB6612FNG dual motor driver
     subtype: right outputs
 
   MOTOR_FL:
@@ -266,13 +279,13 @@ cables:
     gauge: 18 AWG
     colors: [ RD, BK ]
 
-  BAT_TO_DRV_LEFT:
+  BAT_TO_TB_LEFT:
     category: bundle
     length: 0.22
     gauge: 18 AWG
     colors: [ RD, BK ]
 
-  BAT_TO_DRV_RIGHT:
+  BAT_TO_TB_RIGHT:
     category: bundle
     length: 0.22
     gauge: 18 AWG
@@ -486,12 +499,12 @@ connections:
     - REG1: [ 1-2 ]
 
   - - BAT1: [ 1-2 ]
-    - BAT_TO_DRV_LEFT: [ 1-2 ]
-    - DRV_LEFT_PWR: [ 1-2 ]
+    - BAT_TO_TB_LEFT: [ 1-2 ]
+    - TB_LEFT_PWR: [ 1-2 ]
 
   - - BAT1: [ 1-2 ]
-    - BAT_TO_DRV_RIGHT: [ 1-2 ]
-    - DRV_RIGHT_PWR: [ 1-2 ]
+    - BAT_TO_TB_RIGHT: [ 1-2 ]
+    - TB_RIGHT_PWR: [ 1-2 ]
 
   - - BAT1: [ 1-2 ]
     - BAT_TO_SERVO_REG: [ 1-2 ]
@@ -543,11 +556,11 @@ connections:
 
   - - PICO_CTRL_LEFT: [ 1-7 ]
     - CTRL_LEFT: [ 1-7 ]
-    - DRV_LEFT_CTRL: [ 1-7 ]
+    - TB_LEFT_CTRL: [ 1-7 ]
 
   - - PICO_CTRL_RIGHT: [ 1-7 ]
     - CTRL_RIGHT: [ 1-7 ]
-    - DRV_RIGHT_CTRL: [ 1-7 ]
+    - TB_RIGHT_CTRL: [ 1-7 ]
 
   - - PICO_CTRL_SENSOR: [ 1-2, 7 ]
     - US_LEVEL_POWER: [ 1-3 ]
@@ -593,19 +606,19 @@ connections:
     - US_RIGHT_ECHO_LOW: 1
     - PICO_CTRL_SENSOR: 6
 
-  - - DRV_LEFT_OUT: [ 1-2 ]
+  - - TB_LEFT_OUT: [ 1-2 ]
     - LEFT_FRONT_MOTOR: [ 1-2 ]
     - MOTOR_FL: [ 1-2 ]
 
-  - - DRV_LEFT_OUT: [ 3-4 ]
+  - - TB_LEFT_OUT: [ 3-4 ]
     - LEFT_REAR_MOTOR: [ 1-2 ]
     - MOTOR_RL: [ 1-2 ]
 
-  - - DRV_RIGHT_OUT: [ 1-2 ]
+  - - TB_RIGHT_OUT: [ 1-2 ]
     - RIGHT_FRONT_MOTOR: [ 1-2 ]
     - MOTOR_FR: [ 1-2 ]
 
-  - - DRV_RIGHT_OUT: [ 3-4 ]
+  - - TB_RIGHT_OUT: [ 3-4 ]
     - RIGHT_REAR_MOTOR: [ 1-2 ]
     - MOTOR_RR: [ 1-2 ]
 
