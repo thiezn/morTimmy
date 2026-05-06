@@ -74,10 +74,6 @@ source "$PYTHON_VENV_DIR" || { echo "❌ Failed to activate Python virtual envir
 uv pip install wireviz --upgrade || { echo "❌ Failed to upgrade WireViz via pip"; exit 1; }
 brew install graphviz || { echo "❌ Failed to install Graphviz via Homebrew"; exit 1; }
 
-# Update tscircuit globally
-# npm install -g tscircuit/cli || { echo "❌ Failed to install tscircuit globally"; exit 1; }
-
-
 ###############################################
 # Update mdBook + mdbook-mermaid
 ###############################################
@@ -95,10 +91,6 @@ run_quiet "mdbook-mermaid install ."
 # Generate WireViz diagrams
 echo "🔄 Generating WireViz diagrams…"
 run_quiet "wireviz $ROOT_DIR/schematics/wiring/mortimmy.yml -o $BOOK_DIR/src/hardware/schematics/wiring/ -f s"
-
-# Generate tsconfig circuit diagrams
-# echo "🔄 Generating tsconfig circuit diagrams…"
-# run_quiet "tscircuit -i $ROOT_DIR/schematics/pcb/ -o $BOOK_DIR/src/hardware/schematics/pcb/ -f svg"
 
 ###############################################
 # Build the book

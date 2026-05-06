@@ -6,8 +6,7 @@ mod serial;
 use anyhow::Result;
 use clap::ValueEnum;
 use mortimmy_protocol::messages::{
-    command::Command,
-    telemetry::{StatusTelemetry, Telemetry},
+    ControllerMessage, ControllerStatus, ControlMessage, RequestPayload,
 };
 use tokio::time::Duration;
 
@@ -19,7 +18,7 @@ pub use self::serial::ManagedSerialPicoTransport;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ConnectedController {
     pub device_path: String,
-    pub status: StatusTelemetry,
+    pub status: ControllerStatus,
 }
 
 /// Selects which protocol transport backend the host brain uses.
@@ -83,11 +82,27 @@ impl BrainTransport {
         }
     }
 
-    /// Send one protocol command and return the first telemetry response, if any.
-    pub async fn exchange_command(&mut self, command: Command) -> Result<Option<Telemetry>> {
+    /// Send one latest-wins control snapshot.
+    pub async fn send_control(&mut self, control: ControlMessage) -> Result<Vec<ControllerMessage>> {
         match self {
-            Self::Loopback(transport) => transport.exchange_command(command),
-            Self::Serial(transport) => transport.exchange_command(command).await,
+            Self::Loopback(transport) => transport.send_control(control),
+            Self::Serial(transport) => transport.send_control(control).await,
+        }
+    }
+
+    /// Send one correlated request to all matching controllers.
+    pub async fn send_request(&mut self, request: RequestPayload) -> Result<Vec<ControllerMessage>> {
+        match self {
+            Self::Loopback(transport) => transport.send_request(request),
+            Self::Serial(transport) => transport.send_request(request).await,
+        }
+    }
+
+    /// Drain any controller-originated messages currently available on the transport.
+    pub async fn drain_messages(&mut self, timeout: Duration) -> Result<Vec<ControllerMessage>> {
+        match self {
+            Self::Loopback(transport) => transport.drain_messages(timeout),
+            Self::Serial(transport) => transport.drain_messages(timeout).await,
         }
     }
 
@@ -99,6 +114,14 @@ impl BrainTransport {
                 status: transport.status(),
             }],
             Self::Serial(transport) => transport.connected_controllers(),
+        }
+    }
+
+    /// Return whether this backend can currently emit unsolicited controller reports/events.
+    pub const fn supports_unsolicited_messages(&self) -> bool {
+        match self {
+            Self::Loopback(_) => false,
+            Self::Serial(_) => true,
         }
     }
 }

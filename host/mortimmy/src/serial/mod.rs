@@ -6,7 +6,7 @@ use mortimmy_protocol::{
     CodecError, FrameDecoder, FrameError, MAX_FRAME_BODY_LEN, MAX_PAYLOAD_LEN, decode_message,
     encode_message, wrap_payload,
 };
-use mortimmy_protocol::messages::{WireMessage, command::Command};
+use mortimmy_protocol::messages::{HostMessage, WireMessage};
 use serde::{Deserialize, Serialize};
 
 /// Errors returned while encoding or decoding framed serial traffic.
@@ -19,7 +19,13 @@ pub enum SerialBridgeError {
 impl fmt::Display for SerialBridgeError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::Codec(error) => write!(f, "serial codec error: {error:?}"),
+            Self::Codec(CodecError::Deserialize) => write!(
+                f,
+                "serial protocol decode error: framed payload did not match the current mortimmy protocol (wrong serial device or stale firmware)"
+            ),
+            Self::Codec(CodecError::Serialize) => {
+                write!(f, "serial protocol encode error: failed to serialize a host message")
+            }
             Self::Frame(error) => write!(f, "serial frame error: {error:?}"),
         }
     }
@@ -102,9 +108,9 @@ impl SerialBridge {
         self.outbound_sequence
     }
 
-    /// Encode a concrete control command into a framed byte buffer.
-    pub fn encode_command(&mut self, command: Command) -> Result<Vec<u8>, SerialBridgeError> {
-        self.encode_wire_message(&WireMessage::Command(command))
+    /// Encode a concrete host message into a framed byte buffer.
+    pub fn encode_host_message(&mut self, message: &HostMessage) -> Result<Vec<u8>, SerialBridgeError> {
+        self.encode_wire_message(&WireMessage::Host(message.clone()))
     }
 
     /// Encode a wire message into a COBS-framed transport packet.
@@ -126,6 +132,18 @@ impl SerialBridge {
             None => Ok(None),
         }
     }
+
+    /// Feed one byte into the decoder and ignore framed payloads that fail protocol decoding.
+    pub fn push_rx_byte_lossy(&mut self, byte: u8) -> Result<Option<WireMessage>, SerialBridgeError> {
+        match self.decoder.push(byte).map_err(SerialBridgeError::Frame)? {
+            Some(frame) => match decode_message(frame.payload.as_slice()) {
+                Ok(message) => Ok(Some(message)),
+                Err(CodecError::Deserialize) => Ok(None),
+                Err(error) => Err(SerialBridgeError::Codec(error)),
+            },
+            None => Ok(None),
+        }
+    }
 }
 
 #[cfg(test)]
@@ -133,13 +151,10 @@ mod tests {
     use mortimmy_core::{Mode, PwmTicks, ServoTicks};
     use mortimmy_protocol::{FrameDecoder, decode_message, wrap_payload};
     use mortimmy_protocol::messages::{
-        WireMessage,
-        command::Command,
+        ControllerMessage, ControllerResponse, ControllerResponsePayload, ControllerStatus,
+        ControlMessage, HostMessage, RequestId, WireMessage,
         commands::{DesiredStateCommand, DriveCommand, ServoCommand},
-        telemetry::{
-            ControllerCapabilities, ControllerRole, ForwardRangeTelemetry, StatusTelemetry,
-            Telemetry,
-        },
+        telemetry::{ControllerCapabilities, ControllerRole},
     };
 
     use super::{SerialBridge, SerialConfig};
@@ -148,16 +163,19 @@ mod tests {
     fn encodes_desired_state_command_into_protocol_frame() {
         let mut bridge = SerialBridge::new(SerialConfig::default());
         let bytes = bridge
-            .encode_command(Command::SetDesiredState(DesiredStateCommand::new(
-                Mode::Teleop,
-                DriveCommand {
-                    left: PwmTicks(300),
-                    right: PwmTicks(-150),
-                },
-                ServoCommand {
-                    pan: ServoTicks(0),
-                    tilt: ServoTicks(0),
-                },
+            .encode_host_message(&HostMessage::Control(ControlMessage::new(
+                5,
+                DesiredStateCommand::new(
+                    Mode::Teleop,
+                    DriveCommand {
+                        left: PwmTicks(300),
+                        right: PwmTicks(-150),
+                    },
+                    ServoCommand {
+                        pan: ServoTicks(0),
+                        tilt: ServoTicks(0),
+                    },
+                ),
             )))
             .unwrap();
         let mut decoder = FrameDecoder::default();
@@ -173,16 +191,19 @@ mod tests {
         assert_eq!(bridge.outbound_sequence(), 1);
         assert_eq!(
             decoded,
-            Some(WireMessage::Command(Command::SetDesiredState(DesiredStateCommand::new(
-                Mode::Teleop,
-                DriveCommand {
-                    left: PwmTicks(300),
-                    right: PwmTicks(-150),
-                },
-                ServoCommand {
-                    pan: ServoTicks(0),
-                    tilt: ServoTicks(0),
-                },
+            Some(WireMessage::Host(HostMessage::Control(ControlMessage::new(
+                5,
+                DesiredStateCommand::new(
+                    Mode::Teleop,
+                    DriveCommand {
+                        left: PwmTicks(300),
+                        right: PwmTicks(-150),
+                    },
+                    ServoCommand {
+                        pan: ServoTicks(0),
+                        tilt: ServoTicks(0),
+                    },
+                ),
             ))))
         );
     }
@@ -190,14 +211,16 @@ mod tests {
     #[test]
     fn decodes_telemetry_stream() {
         let mut bridge = SerialBridge::new(SerialConfig::default());
-        let message = WireMessage::Telemetry(Telemetry::Status(StatusTelemetry {
-            mode: Mode::Teleop,
-            controller_role: ControllerRole::MotionController,
-            capabilities: ControllerCapabilities::DRIVE,
-            uptime_ms: 42,
-            link_quality: 100,
-            error: None,
-            ranges: ForwardRangeTelemetry::default(),
+        let message = WireMessage::Controller(ControllerMessage::Response(ControllerResponse {
+            request_id: RequestId(7),
+            payload: ControllerResponsePayload::ControllerStatus(ControllerStatus {
+                mode: Mode::Teleop,
+                controller_role: ControllerRole::MotionController,
+                capabilities: ControllerCapabilities::DRIVE,
+                uptime_ms: 42,
+                link_quality: 100,
+                error: None,
+            }),
         }));
         let mut payload_buffer = [0u8; mortimmy_protocol::MAX_PAYLOAD_LEN];
         let payload = mortimmy_protocol::encode_message(&message, &mut payload_buffer).unwrap();
@@ -207,6 +230,37 @@ mod tests {
 
         for byte in frame {
             if let Some(message) = bridge.push_rx_byte(*byte).unwrap() {
+                decoded = Some(message);
+            }
+        }
+
+        assert_eq!(decoded, Some(message));
+    }
+
+    #[test]
+    fn lossy_decoder_recovers_after_invalid_payload_frame() {
+        let mut bridge = SerialBridge::new(SerialConfig::default());
+        let mut invalid_frame_buffer = [0u8; mortimmy_protocol::MAX_FRAME_BODY_LEN + 1];
+        let invalid_frame = wrap_payload(&[0xAA, 0xBB, 0xCC], 3, &mut invalid_frame_buffer).unwrap();
+        let message = WireMessage::Controller(ControllerMessage::Response(ControllerResponse {
+            request_id: RequestId(9),
+            payload: ControllerResponsePayload::ControllerStatus(ControllerStatus {
+                mode: Mode::Teleop,
+                controller_role: ControllerRole::MotionController,
+                capabilities: ControllerCapabilities::DRIVE,
+                uptime_ms: 7,
+                link_quality: 99,
+                error: None,
+            }),
+        }));
+        let mut payload_buffer = [0u8; mortimmy_protocol::MAX_PAYLOAD_LEN];
+        let payload = mortimmy_protocol::encode_message(&message, &mut payload_buffer).unwrap();
+        let mut valid_frame_buffer = [0u8; mortimmy_protocol::MAX_FRAME_BODY_LEN + 1];
+        let valid_frame = wrap_payload(payload, 4, &mut valid_frame_buffer).unwrap();
+        let mut decoded = None;
+
+        for byte in invalid_frame.iter().chain(valid_frame.iter()) {
+            if let Some(message) = bridge.push_rx_byte_lossy(*byte).unwrap() {
                 decoded = Some(message);
             }
         }

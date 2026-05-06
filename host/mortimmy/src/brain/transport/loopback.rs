@@ -3,9 +3,8 @@ use mortimmy_protocol::{
     FrameDecoder, MAX_FRAME_BODY_LEN, MAX_PAYLOAD_LEN, decode_message, encode_message, wrap_payload,
 };
 use mortimmy_protocol::messages::{
-    WireMessage,
-    command::Command,
-    telemetry::{StatusTelemetry, Telemetry},
+    ControllerMessage, ControllerStatus, ControlMessage, HostMessage, RequestId,
+    RequestMessage, RequestPayload, WireMessage,
 };
 use mortimmy_rp2350::FirmwareScaffold;
 
@@ -16,6 +15,7 @@ use crate::serial::{SerialBridge, SerialBridgeError, SerialConfig};
 pub struct LoopbackPicoTransport {
     host_bridge: SerialBridge,
     device: SimulatedPico,
+    next_request_id: u16,
 }
 
 impl LoopbackPicoTransport {
@@ -24,34 +24,55 @@ impl LoopbackPicoTransport {
         Self {
             host_bridge: SerialBridge::new(serial_config),
             device: SimulatedPico::default(),
+            next_request_id: 1,
         }
     }
 
-    /// Exchange one command with the simulated Pico and decode the first telemetry response.
-    pub fn exchange_command(&mut self, command: Command) -> Result<Option<Telemetry>> {
-        let outbound = self.host_bridge.encode_command(command)?;
+    /// Send one latest-wins control snapshot to the simulated Pico.
+    pub fn send_control(&mut self, control: ControlMessage) -> Result<Vec<ControllerMessage>> {
+        self.exchange_host_message(HostMessage::Control(control))
+    }
+
+    /// Send one correlated request to the simulated Pico.
+    pub fn send_request(&mut self, request: RequestPayload) -> Result<Vec<ControllerMessage>> {
+        let request_id = RequestId(self.next_request_id);
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        self.exchange_host_message(HostMessage::Request(RequestMessage { request_id, payload: request }))
+    }
+
+    /// Drain controller-originated messages currently available on the loopback transport.
+    pub fn drain_messages(&mut self, _timeout: tokio::time::Duration) -> Result<Vec<ControllerMessage>> {
+        Ok(Vec::new())
+    }
+
+    /// Exchange one host-originated `message` with the simulated Pico and decode all replies.
+    fn exchange_host_message(&mut self, message: HostMessage) -> Result<Vec<ControllerMessage>> {
+        let outbound = self.host_bridge.encode_host_message(&message)?;
         let response_bytes = self.device.handle_host_bytes(&outbound)?;
-        let mut decoded = None;
+        let mut decoded = Vec::new();
 
         for byte in response_bytes {
             if let Some(message) = self.host_bridge.push_rx_byte(byte)? {
-                decoded = Some(message);
+                match message {
+                    WireMessage::Controller(message) => decoded.push(message),
+                    WireMessage::Host(_) => {
+                        bail!("loopback transport received a host message from the firmware side")
+                    }
+                }
             }
         }
 
-        match decoded {
-            Some(WireMessage::Telemetry(telemetry)) => Ok(Some(telemetry)),
-            Some(WireMessage::Command(_)) => bail!("loopback transport received a command from the firmware side"),
-            None => Ok(None),
-        }
+        Ok(decoded)
     }
 
+    /// Return the loopback device path used for logging and tests.
     pub fn device_path(&self) -> &str {
         self.host_bridge.config.primary_device_path()
     }
 
-    pub fn status(&self) -> StatusTelemetry {
-        self.device.scaffold.status_telemetry()
+    /// Return the simulated controller status snapshot.
+    pub fn status(&self) -> ControllerStatus {
+        self.device.scaffold.controller_status()
     }
 }
 
@@ -63,6 +84,7 @@ struct SimulatedPico {
 }
 
 impl SimulatedPico {
+    /// Feed framed host `bytes` into the scaffold and return framed controller replies.
     fn handle_host_bytes(&mut self, bytes: &[u8]) -> Result<Vec<u8>> {
         let mut encoded_responses = Vec::new();
 
@@ -87,6 +109,7 @@ impl SimulatedPico {
     }
 }
 
+/// Convert a frame decoder error into the host serial bridge error surface.
 fn serial_frame_error(error: mortimmy_protocol::FrameError) -> SerialBridgeError {
     SerialBridgeError::Frame(error)
 }

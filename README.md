@@ -2,7 +2,7 @@
 
 `mortimmy` is a Rust robotics workspace for a small rover split across two runtime environments:
 
-- `firmware/rp2350` for deterministic embedded control on the Pimoroni Pico LiPo 2 (RP2350B)
+- `firmware/rp2350` for deterministic embedded control across two RP2350 board images: a motion-controller image for the Pimoroni Pico LiPo 2 and an audio-controller image for the Pico 2 W + Pico Audio Pack
 - `host/mortimmy` for Raspberry Pi or macOS orchestration, transport bridging, telemetry, audio routing, and future camera control
 
 The current hardware is:
@@ -20,10 +20,10 @@ The current hardware is:
 | Component | Version / Model | Purpose |
 | --- | --- | --- |
 | Raspberry Pi | 3B V1.2 | Main host computer running the daemon, USB device orchestration, telemetry, and higher-level coordination |
-| Audio controller | Pico 2 W + Pico Audio Pack | USB-connected audio and display controller for playback and local visual feedback |
-| Motion controller | Pimoroni Pico LiPo 2 (RP2350B) | USB-connected real-time controller for motors, sensors, and future servo logic |
+| Motion controller | Pimoroni Pico LiPo 2 (RP2350B) | USB-connected real-time controller for motors, sensors, the LCD status display, and future servo logic |
+| Audio controller | Pico 2 W + Pico Audio Pack | USB-connected audio playback controller for the DAC and amp-enable path |
 | Audio add-on | Pimoroni Pico Audio Pack | I2S DAC and headphone / line-out hardware mounted on the Pico 2 W |
-| Character display | LCM1602C V2.1 | 16x2 local status display driven in 4-bit mode from the audio Pico |
+| Character display | LCM1602C V2.1 | 16x2 local status display driven in 4-bit mode from the motion-controller Pico |
 | Ultrasonic sensors | 2x HC-SR04 | Forward-left and forward-right distance measurement for obstacle awareness |
 | Motor drivers | 2x L298N dual H-bridge | Drive four wheel motors from the motion controller GPIO |
 | Wheel motors | 4x DC gear motors | Rover propulsion |
@@ -36,6 +36,17 @@ Shared crates under `crates/` define the core types, driver traits, and the wire
 
 For the current ultrasonic path, the Adafruit BSS138 board should be treated as a four-channel signal translator, not as a power supply. It needs `3V3`, `5V`, and `GND` connected as reference rails, then one channel for `TRIG` and one for `ECHO` if you want a conservative 3.3 V to 5 V interface. That means one board cleanly supports two HC-SR04 modules; a third sensor only fits if you accept module-dependent direct 3.3 V triggering and reserve the board channels for `ECHO` only.
 
+## Firmware Targets
+
+The embedded workspace keeps one RP2350 crate and composes board-specific images with feature flags instead of cloning a second firmware crate. Each image owns its board profile, pin map, target directory, and deployment metadata.
+
+| Deploy target | Board | Cargo feature | Target dir | Current scope |
+| --- | --- | --- | --- | --- |
+| `motion-controller` | Pimoroni Pico LiPo 2 | `board-motion-controller` | `target/mortimmy-rp2350-motion-controller` | USB CDC transport, L298N motor drive, HC-SR04 ranging, LCD1602 bring-up on GP20/GP21/GP22/GP26/GP27/GP28 |
+| `audio-controller` | Pico 2 W + Pico Audio Pack | `board-audio-controller` | `target/mortimmy-rp2350-audio-controller` | USB CDC transport, Audio Pack bring-up seam on GP9-GP11 plus optional GP29 amp enable |
+
+`mortimmy-tools deploy firmware ...` selects these metadata blocks with `--target motion-controller` or `--target audio-controller`. The CLI still defaults to `motion-controller` for backwards compatibility.
+
 Detailed architecture notes live in [docs/src/architecture/architecture.md](docs/src/architecture/architecture.md). Protocol-specific notes live in [docs/src/architecture/protocol.md](docs/src/architecture/protocol.md). Open follow-up work lives in [TODO.md](TODO.md).
 
 ## Current Scope
@@ -45,7 +56,7 @@ The workspace now contains a compileable control-plane scaffold with test and to
 - `mortimmy-core` defines shared units, limits, modes, and error types.
 - `mortimmy-protocol` defines the postcard schema, typed control and telemetry messages, CRC16 checks, and a stream-oriented COBS frame decoder sized for the current audio-forwarding contract.
 - `mortimmy-drivers` defines hardware-facing traits for motors, servos, ultrasonic sensors, audio output, and Trellis input/LED control.
-- `mortimmy-rp2350` is the active embedded crate for the RP2350B board/audio/Trellis direction using `embassy-rp`, `embassy-usb`, and `panic-probe`, and it now applies shared protocol commands directly into scaffold state with matching telemetry snapshots.
+- `mortimmy-rp2350` is the active embedded crate for both RP2350 controller boards using `embassy-rp`, `embassy-usb`, and `panic-probe`; it now splits board-owned runtime wiring by target while keeping one shared scaffold, protocol bridge, and deploy metadata surface.
 - `mortimmy` provides `start` and `config` subcommands backed by a nested `config.toml` layout for serial, websocket, telemetry, audio, camera, and logging settings, and the `start` path now runs a keyboard-driven brain loop against either the loopback Pico scaffold or future live transports.
 - `mortimmy-tools` can inspect and replay captured framed protocol streams, build host artifacts, and deploy RP2350 firmware through BOOTSEL or probe-rs workflows.
 - `mortimmy-integration-test` provides the root integration harness for protocol roundtrips and future live hardware smoke tests.
@@ -94,16 +105,18 @@ Build the whole workspace:
 cargo check --workspace
 ```
 
-Validate the active embedded target specifically:
+Validate both embedded images explicitly:
 
 ```bash
-cargo check -p mortimmy-rp2350 --target thumbv8m.main-none-eabihf
+cargo build -p mortimmy-rp2350 --target thumbv8m.main-none-eabihf --no-default-features --features board-motion-controller --target-dir target/mortimmy-rp2350-motion-controller
+cargo build -p mortimmy-rp2350 --target thumbv8m.main-none-eabihf --no-default-features --features board-audio-controller --target-dir target/mortimmy-rp2350-audio-controller
 ```
 
-Build the firmware ELF that is used by both probe-rs and UF2 workflows:
+Or drive the same builds through the deployment metadata owned by the firmware crate:
 
 ```bash
-cargo build -p mortimmy-rp2350 --target thumbv8m.main-none-eabihf
+cargo run -p mortimmy-tools -- deploy firmware build --target motion-controller
+cargo run -p mortimmy-tools -- deploy firmware build --target audio-controller
 ```
 
 Run tests and lints:
@@ -128,7 +141,9 @@ Optional coverage report:
 
 ## Firmware Bring-Up On macOS
 
-The current RP2350 firmware can be smoke-tested without any attached peripherals. On the embedded target it now starts an Embassy USB CDC task that decodes the shared framed protocol, applies commands through the firmware scaffold, and writes telemetry responses back over the same USB link.
+The current RP2350 firmware can be smoke-tested without any attached peripherals. On the embedded target each image now starts the same Embassy USB CDC protocol bridge, then hands off to a board-specific runtime module for the actual pin map and peripheral ownership.
+
+The motion-controller image owns the Pico LiPo 2 motor, ultrasonic, and LCD wiring. The audio-controller image now only reserves the Pico Audio Pack control pins and exposes the seam where the RP2350 I2S transport will be wired in next.
 
 The shared protocol is now exercised inside the firmware crate as well: desired-state, parameter, audio, Trellis LED, status, and ping commands are applied to the firmware scaffold under unit tests, and the default audio chunk size is aligned across host planning, wire payload sizing, and firmware buffering.
 
@@ -136,7 +151,8 @@ Validate the firmware locally before touching hardware:
 
 ```bash
 cargo test -p mortimmy-rp2350
-cargo run -p mortimmy-tools -- deploy firmware uf2
+cargo run -p mortimmy-tools -- deploy firmware uf2 --target motion-controller
+cargo run -p mortimmy-tools -- deploy firmware uf2 --target audio-controller
 ```
 
 Upload over plain USB with the Pico in BOOTSEL mode:
@@ -146,8 +162,10 @@ Upload over plain USB with the Pico in BOOTSEL mode:
 3. Run:
 
 ```bash
-cargo run -p mortimmy-tools -- deploy firmware uf2-deploy
+cargo run -p mortimmy-tools -- deploy firmware uf2-deploy --target motion-controller
 ```
+
+Swap `--target audio-controller` when you are working with the Pico 2 W image.
 
 If `picotool` is installed, `mortimmy-tools deploy firmware uf2-deploy` prefers `picotool load -v -x -t uf2` and reboots the board directly. This is the recommended macOS path because mass-storage copies to the BOOTSEL volume have hung behind `storagekitd` on this machine. The tool falls back to copying `NEW.UF2` only when `picotool` cannot access the BOOTSEL interface.
 
@@ -159,9 +177,11 @@ Flash and stream RTT logs through an SWD probe:
 
 ```bash
 cargo run -p mortimmy-tools -- deploy firmware probe-list
-cargo run -p mortimmy-tools -- deploy firmware flash --probe-index 0
-cargo run -p mortimmy-tools -- deploy firmware run --probe-index 0
+cargo run -p mortimmy-tools -- deploy firmware flash --target motion-controller --probe-index 0
+cargo run -p mortimmy-tools -- deploy firmware run --target motion-controller --probe-index 0
 ```
+
+Use `--target audio-controller` with the same commands when debugging the Pico 2 W image.
 
 The probe-based workflow uses the `probe-rs` chip name `RP235x`. A successful RTT session starts with a line like:
 
@@ -169,11 +189,32 @@ The probe-based workflow uses the `probe-rs` chip name `RP235x`. A successful RT
 boot board=Pimoroni Pico LiPo 2 mcu=RP2350B flash=16777216 psram=8388608 transport=usb-cdc mode=teleop audio=host-waveform-bridge chunk_samples=240 trellis=false ultrasonic=false battery=false
 ```
 
+This path has now been validated on this machine with a Raspberry Pi Debug Probe after updating the probe firmware. `mortimmy-tools deploy firmware flash --probe-index 0 --verify` succeeds over SWD while the Pico LiPo 2 is not in BOOTSEL mode, so BOOTSEL is no longer required for normal flashing when the probe is attached.
+
+If `mortimmy-tools deploy firmware run --probe-index 0` flashes successfully but shows no RTT or defmt output, rebuild with `DEFMT_LOG=info`. `defmt` filters logs at build time, and without that override the `info!` boot banner can be compiled out entirely. The provided VS Code build task below already sets `DEFMT_LOG=info` for you.
+
 If `firmware-flash` reports `No debug probes were found`, attach an SWD-compatible debug probe or fall back to the BOOTSEL/UF2 path above.
 
-On the validation machine used for the BOOTSEL bring-up, `mortimmy-tools deploy firmware probe-list` currently reports `No debug probes were found.`, so BOOTSEL remains the only available hardware flashing path.
-
 After a successful BOOTSEL upload, the Pico should enumerate as a runtime USB CDC device such as `/dev/cu.usbmodem*` on macOS. That runtime enumeration path is implemented in firmware; regular live smoke coverage for the full host-to-device roundtrip remains tracked in `TODO.md`.
+
+## Debug In VS Code
+
+Install the VS Code extension `probe-rs.probe-rs-debugger` and keep `probe-rs` on your `PATH`.
+
+This repo now ships a ready-to-use [launch.json](.vscode/launch.json) and [tasks.json](.vscode/tasks.json) for the motion-controller firmware. The default build task compiles the RP2350 ELF with `DEFMT_LOG=info` into the same `target/mortimmy-rp2350-motion-controller` directory used by the repo's deployment tooling. The audio-controller image uses the same crate and target triple, but it does not have a dedicated VS Code launch/task preset yet.
+
+Typical flow:
+
+1. Connect the Raspberry Pi Debug Probe to the Pico LiPo 2 over SWD.
+2. Keep the Pico's normal USB connection attached if you also want the runtime CDC serial device on macOS.
+3. In VS Code, run the default build task or press `F5` and choose `RP2350 Launch + RTT`.
+4. Use `RP2350 Attach + RTT` when the firmware is already flashed and you want to attach without reflashing.
+
+The launch configuration targets chip `RP235x`, uses `Swd`, flashes the ELF from `target/mortimmy-rp2350-motion-controller/thumbv8m.main-none-eabihf/debug/mortimmy-rp2350`, and enables RTT decoding for defmt channel 0. RTT output appears in the integrated terminal.
+
+If you have more than one probe attached, add a `probe` field to [launch.json](.vscode/launch.json) using the `VID:PID:SERIAL` form shown by `cargo run -p mortimmy-tools -- deploy firmware probe-list`.
+
+This repo does not currently ship a CMSIS-SVD file for RP235x, so the launch configuration omits `svdFile`. Source-level breakpoints, stepping, call stacks, locals, and defmt RTT logs still work without it.
 
 ## Run Locally On macOS
 
@@ -365,24 +406,25 @@ mortimmy-tools deploy host remote-install --remote-host pi@raspberrypi.local --s
 Firmware workflows:
 
 ```bash
-mortimmy-tools deploy firmware build
-mortimmy-tools deploy firmware print-artifact
-mortimmy-tools deploy firmware uf2
-mortimmy-tools deploy firmware uf2-deploy
+mortimmy-tools deploy firmware build --target motion-controller
+mortimmy-tools deploy firmware build --target audio-controller
+mortimmy-tools deploy firmware print-artifact --target audio-controller
+mortimmy-tools deploy firmware uf2 --target audio-controller
+mortimmy-tools deploy firmware uf2-deploy --target motion-controller
 mortimmy-tools deploy firmware probe-list
-mortimmy-tools deploy firmware flash --probe-index 0
-mortimmy-tools deploy firmware run --probe-index 0
+mortimmy-tools deploy firmware flash --target motion-controller --probe-index 0
+mortimmy-tools deploy firmware run --target motion-controller --probe-index 0
 ```
 
 The most useful customization flags are:
 
 - Global logging: `--log-level trace|debug|info|warn|error`, `--no-color`
 - Host deployment: `--package`, `--bin`, `--profile`, `--install-dir`, `--remote-host`, `--remote-dir`
-- Firmware build and UF2 packaging: `--target rp2350`, `--profile`, `--output`
+- Firmware build and UF2 packaging: `--target motion-controller|audio-controller`, `--profile`, `--output`
 - Firmware probe workflows: `--probe-index`, `--protocol swd|jtag`, `--speed-khz`
 - Firmware flashing behavior: `--chip-erase`, `--preverify`, `--verify`, `--restore-unwritten`, `--disable-double-buffering`
 
-`mortimmy-tools deploy firmware uf2-deploy` prefers `picotool` when it can see the board in BOOTSEL mode and falls back to the mounted UF2 volume copy path only when the picoboot interface is unavailable. `mortimmy-tools deploy firmware run` currently delegates the monitor UX to `probe-rs run`, which preserves the existing defmt/RTT workflow while keeping the build and target selection inside the Rust deployment tool.
+`mortimmy-tools deploy firmware uf2-deploy` prefers `picotool` when it can see the board in BOOTSEL mode and falls back to the mounted UF2 volume copy path only when the picoboot interface is unavailable. `mortimmy-tools deploy firmware run` currently delegates the monitor UX to `probe-rs run`, which preserves the existing defmt/RTT workflow while keeping the board-target selection inside the Rust deployment tool.
 
 ## Documentation
 

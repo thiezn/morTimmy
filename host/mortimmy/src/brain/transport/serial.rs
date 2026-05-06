@@ -1,12 +1,12 @@
 use anyhow::{Context, Result, anyhow, bail};
 use mortimmy_protocol::messages::{
-    WireMessage,
-    command::Command,
+    ControllerMessage, ControllerResponsePayload, ControllerStatus, ControlMessage, HostMessage,
+    RequestId, RequestMessage, RequestPayload, WireMessage,
     commands::ParameterKey,
-    telemetry::{ControllerCapabilities, ControllerRole, StatusTelemetry, Telemetry},
+    telemetry::{ControllerCapabilities, ControllerRole},
 };
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::time::{Duration, timeout};
+use tokio::time::{Duration, Instant, timeout};
 use tokio_serial::SerialStream;
 
 use crate::{
@@ -20,6 +20,7 @@ const READ_BUFFER_LEN: usize = 256;
 #[derive(Debug)]
 pub struct ManagedSerialPicoTransport {
     controllers: Vec<ManagedSerialController>,
+    next_request_id: u16,
 }
 
 #[derive(Debug)]
@@ -27,7 +28,7 @@ struct ManagedSerialController {
     config: SerialConfig,
     response_timeout: Duration,
     inner: Option<SerialPicoTransport>,
-    status: Option<StatusTelemetry>,
+    status: Option<ControllerStatus>,
 }
 
 impl ManagedSerialPicoTransport {
@@ -39,6 +40,7 @@ impl ManagedSerialPicoTransport {
                 .into_iter()
                 .map(|config| ManagedSerialController::new(config, response_timeout))
                 .collect(),
+            next_request_id: 1,
         }
     }
 
@@ -47,6 +49,7 @@ impl ManagedSerialPicoTransport {
         self.controllers.iter().any(ManagedSerialController::is_connected)
     }
 
+    /// Return the discovered controllers and their last known status snapshots.
     pub fn connected_controllers(&self) -> Vec<ConnectedController> {
         self.controllers
             .iter()
@@ -95,9 +98,9 @@ impl ManagedSerialPicoTransport {
         }
     }
 
-    /// Exchange one command over the active serial session.
-    pub async fn exchange_command(&mut self, command: Command) -> Result<Option<Telemetry>> {
-        let mut first_telemetry = None;
+    /// Send one latest-wins control snapshot over the active serial session.
+    pub async fn send_control(&mut self, control: ControlMessage) -> Result<Vec<ControllerMessage>> {
+        let mut messages = Vec::new();
         let mut targeted_any = false;
         let mut last_error = None;
 
@@ -106,24 +109,16 @@ impl ManagedSerialPicoTransport {
                 continue;
             };
 
-            if !controller_accepts_command(status, &command) {
+            if !controller_accepts_control(status) {
                 continue;
             }
 
             targeted_any = true;
-            match controller.exchange_command(command.clone()).await {
-                Ok(Some(Telemetry::Status(status))) => {
-                    controller.status = Some(status);
-                    if first_telemetry.is_none() {
-                        first_telemetry = Some(Telemetry::Status(status));
-                    }
+            match controller.send_control(control).await {
+                Ok(controller_messages) => {
+                    update_status_from_messages(controller, &controller_messages);
+                    messages.extend(controller_messages);
                 }
-                Ok(Some(telemetry)) => {
-                    if first_telemetry.is_none() {
-                        first_telemetry = Some(telemetry);
-                    }
-                }
-                Ok(None) => {}
                 Err(error) => {
                     let device_path = controller.device_path().to_string();
                     controller.disconnect();
@@ -134,7 +129,7 @@ impl ManagedSerialPicoTransport {
 
         if !targeted_any {
             return if self.is_connected() {
-                Ok(None)
+                Ok(Vec::new())
             } else {
                 Err(anyhow!("serial transport is disconnected"))
             };
@@ -148,19 +143,98 @@ impl ManagedSerialPicoTransport {
             ));
         }
 
-        if first_telemetry.is_some() {
-            return Ok(first_telemetry);
-        }
-
         if self.is_connected() {
-            Ok(None)
+            Ok(messages)
         } else {
             Err(last_error.unwrap_or_else(|| anyhow!("serial transport is disconnected")))
         }
     }
+
+    /// Send one correlated request over the active serial session.
+    pub async fn send_request(&mut self, request: RequestPayload) -> Result<Vec<ControllerMessage>> {
+        let request_id = RequestId(self.next_request_id);
+        self.next_request_id = self.next_request_id.wrapping_add(1);
+        let mut messages = Vec::new();
+        let mut targeted_any = false;
+        let mut last_error = None;
+
+        for controller in &mut self.controllers {
+            let Some(status) = controller.status else {
+                continue;
+            };
+
+            if !controller_accepts_request(status, &request) {
+                continue;
+            }
+
+            targeted_any = true;
+            match controller.send_request(request_id, request.clone()).await {
+                Ok(controller_messages) => {
+                    update_status_from_messages(controller, &controller_messages);
+                    messages.extend(controller_messages);
+                }
+                Err(error) => {
+                    let device_path = controller.device_path().to_string();
+                    controller.disconnect();
+                    last_error = Some(anyhow!("{}: {error:#}", device_path));
+                }
+            }
+        }
+
+        if !targeted_any {
+            return if self.is_connected() {
+                Ok(Vec::new())
+            } else {
+                Err(anyhow!("serial transport is disconnected"))
+            };
+        }
+
+        if let Some((role, device_paths)) = duplicate_controller_role(&self.connected_controllers()) {
+            return Err(anyhow!(
+                "multiple controllers reported role {:?}: {}",
+                role,
+                device_paths.join(", ")
+            ));
+        }
+
+        if self.is_connected() {
+            Ok(messages)
+        } else {
+            Err(last_error.unwrap_or_else(|| anyhow!("serial transport is disconnected")))
+        }
+    }
+
+    /// Drain any controller-originated messages currently available on the active serial sessions.
+    pub async fn drain_messages(&mut self, timeout: Duration) -> Result<Vec<ControllerMessage>> {
+        let mut messages = Vec::new();
+        let mut wait = timeout;
+
+        for controller in &mut self.controllers {
+            if !controller.is_connected() {
+                continue;
+            }
+
+            match controller.drain_messages(wait).await {
+                Ok(controller_messages) => {
+                    update_status_from_messages(controller, &controller_messages);
+                    messages.extend(controller_messages);
+                }
+                Err(error) => {
+                    let device_path = controller.device_path().to_string();
+                    controller.disconnect();
+                    return Err(anyhow!("{}: {error:#}", device_path));
+                }
+            }
+
+            wait = Duration::ZERO;
+        }
+
+        Ok(messages)
+    }
 }
 
 impl ManagedSerialController {
+    /// Create a disconnected controller slot for `config` and `response_timeout`.
     fn new(config: SerialConfig, response_timeout: Duration) -> Self {
         Self {
             config,
@@ -170,25 +244,30 @@ impl ManagedSerialController {
         }
     }
 
+    /// Return the primary device path configured for this controller slot.
     fn device_path(&self) -> &str {
         self.config.primary_device_path()
     }
 
+    /// Return whether this controller slot is connected and has discovered status.
     fn is_connected(&self) -> bool {
         self.status.is_some()
     }
 
+    /// Drop the live transport and forget the last discovered status.
     fn disconnect(&mut self) {
         self.inner = None;
         self.status = None;
     }
 
+    /// Open the serial transport and cache the controller status discovered from it.
     async fn try_connect_and_discover(&mut self) -> Result<()> {
         self.try_connect().await?;
         self.status = Some(self.query_status().await?);
         Ok(())
     }
 
+    /// Open the serial transport if it is not already connected.
     async fn try_connect(&mut self) -> Result<()> {
         if self.inner.is_some() {
             return Ok(());
@@ -199,24 +278,72 @@ impl ManagedSerialController {
         Ok(())
     }
 
-    async fn query_status(&mut self) -> Result<StatusTelemetry> {
-        match self.exchange_command(Command::GetStatus).await? {
-            Some(Telemetry::Status(status)) => Ok(status),
-            Some(telemetry) => bail!(
-                "unexpected telemetry during controller discovery on {}: {telemetry:?}",
-                self.device_path()
-            ),
-            None => bail!("missing status telemetry during controller discovery on {}", self.device_path()),
+    /// Query and return the controller status snapshot from the live serial device.
+    async fn query_status(&mut self) -> Result<ControllerStatus> {
+        let messages = self
+            .send_request(RequestId(0), RequestPayload::GetControllerStatus)
+            .await?;
+
+        for message in messages {
+            if let ControllerMessage::Response(response) = message
+                && let ControllerResponsePayload::ControllerStatus(status) = response.payload
+            {
+                return Ok(status);
+            }
         }
+
+        bail!(
+            "missing controller status response during discovery on {}",
+            self.device_path()
+        )
     }
 
-    async fn exchange_command(&mut self, command: Command) -> Result<Option<Telemetry>> {
+    /// Send one correlated `request` with `request_id` through this controller slot.
+    async fn send_request(
+        &mut self,
+        request_id: RequestId,
+        request: RequestPayload,
+    ) -> Result<Vec<ControllerMessage>> {
         let result = {
             let transport = self
                 .inner
                 .as_mut()
                 .context("serial transport is disconnected")?;
-            transport.exchange_command(command, self.response_timeout).await
+            transport.send_request(request_id, request, self.response_timeout).await
+        };
+
+        if result.is_err() {
+            self.disconnect();
+        }
+
+        result
+    }
+
+    /// Send one latest-wins `control` snapshot through this controller slot.
+    async fn send_control(&mut self, control: ControlMessage) -> Result<Vec<ControllerMessage>> {
+        let result = {
+            let transport = self
+                .inner
+                .as_mut()
+                .context("serial transport is disconnected")?;
+            transport.send_control(control, Duration::ZERO).await
+        };
+
+        if result.is_err() {
+            self.disconnect();
+        }
+
+        result
+    }
+
+    /// Drain unsolicited controller messages from this controller slot for up to `timeout`.
+    async fn drain_messages(&mut self, timeout: Duration) -> Result<Vec<ControllerMessage>> {
+        let result = {
+            let transport = self
+                .inner
+                .as_mut()
+                .context("serial transport is disconnected")?;
+            transport.drain_messages(timeout).await
         };
 
         if result.is_err() {
@@ -227,13 +354,17 @@ impl ManagedSerialController {
     }
 }
 
-fn controller_accepts_command(status: StatusTelemetry, command: &Command) -> bool {
-    match command {
-        Command::SetDesiredState(_) => {
-            status.capabilities.contains(ControllerCapabilities::DRIVE)
-                || status.capabilities.contains(ControllerCapabilities::SERVO)
-        }
-        Command::SetParam(update) => match update.key {
+/// Return whether `status` should receive latest-wins control snapshots.
+fn controller_accepts_control(status: ControllerStatus) -> bool {
+    status.capabilities.contains(ControllerCapabilities::DRIVE)
+        || status.capabilities.contains(ControllerCapabilities::SERVO)
+}
+
+/// Return whether `status` should receive the correlated `request`.
+fn controller_accepts_request(status: ControllerStatus, request: &RequestPayload) -> bool {
+    match request {
+        RequestPayload::GetControllerStatus | RequestPayload::ConfigureReports(_) => true,
+        RequestPayload::SetParam(update) => match update.key {
             ParameterKey::MaxDrivePwm => status.capabilities.contains(ControllerCapabilities::DRIVE),
             ParameterKey::MaxServoStep => status.capabilities.contains(ControllerCapabilities::SERVO),
             ParameterKey::LinkTimeoutMs => true,
@@ -244,12 +375,30 @@ fn controller_accepts_command(status: StatusTelemetry, command: &Command) -> boo
                 status.capabilities.contains(ControllerCapabilities::AUDIO_OUTPUT)
             }
         },
-        Command::PlayAudio(_) => status.capabilities.contains(ControllerCapabilities::AUDIO_OUTPUT),
-        Command::SetTrellisLeds(_) => status.capabilities.contains(ControllerCapabilities::TEXT_DISPLAY),
-        Command::GetStatus => true,
+        RequestPayload::PlayAudio(_) => {
+            status.capabilities.contains(ControllerCapabilities::AUDIO_OUTPUT)
+        }
+        RequestPayload::SetTrellisLeds(_) => {
+            status.capabilities.contains(ControllerCapabilities::TEXT_DISPLAY)
+        }
     }
 }
 
+/// Update the cached controller status when `messages` contains a status response.
+fn update_status_from_messages(
+    controller: &mut ManagedSerialController,
+    messages: &[ControllerMessage],
+) {
+    for message in messages {
+        if let ControllerMessage::Response(response) = message
+            && let ControllerResponsePayload::ControllerStatus(status) = response.payload
+        {
+            controller.status = Some(status);
+        }
+    }
+}
+
+/// Return the first duplicate controller role together with the conflicting device paths.
 fn duplicate_controller_role(
     controllers: &[ConnectedController],
 ) -> Option<(ControllerRole, Vec<String>)> {
@@ -295,9 +444,48 @@ impl SerialPicoTransport {
         })
     }
 
-    /// Exchange one command with the Pico over a real serial link and decode the first telemetry response.
-    pub async fn exchange_command(&mut self, command: Command, response_timeout: Duration) -> Result<Option<Telemetry>> {
-        let outbound = self.bridge.encode_command(command)?;
+    /// Send one latest-wins control snapshot and drain any immediately available controller messages.
+    pub async fn send_control(
+        &mut self,
+        control: ControlMessage,
+        drain_timeout: Duration,
+    ) -> Result<Vec<ControllerMessage>> {
+        self.write_host_message(&HostMessage::Control(control)).await?;
+        self.drain_messages(drain_timeout).await
+    }
+
+    /// Send one correlated request and collect messages until the matching response arrives.
+    pub async fn send_request(
+        &mut self,
+        request_id: RequestId,
+        request: RequestPayload,
+        response_timeout: Duration,
+    ) -> Result<Vec<ControllerMessage>> {
+        self.write_host_message(&HostMessage::Request(RequestMessage { request_id, payload: request }))
+            .await?;
+        self.read_until_response(request_id, response_timeout).await
+    }
+
+    /// Drain any controller-originated messages available within the provided timeout.
+    pub async fn drain_messages(&mut self, timeout_window: Duration) -> Result<Vec<ControllerMessage>> {
+        let mut messages = Vec::new();
+        let mut wait = timeout_window;
+
+        loop {
+            match timeout(wait, self.read_one_controller_message()).await {
+                Ok(Ok(message)) => {
+                    messages.push(message);
+                    wait = Duration::ZERO;
+                }
+                Ok(Err(error)) => return Err(error),
+                Err(_) => return Ok(messages),
+            }
+        }
+    }
+
+    /// Encode and write one host `message` to the serial port.
+    async fn write_host_message(&mut self, message: &HostMessage) -> Result<()> {
+        let outbound = self.bridge.encode_host_message(message)?;
         self.port
             .write_all(&outbound)
             .await
@@ -307,12 +495,37 @@ impl SerialPicoTransport {
             .await
             .context("failed to flush command bytes to the Pico serial link")?;
 
-        timeout(response_timeout, self.read_response())
-            .await
-            .context("timed out waiting for telemetry from the Pico serial link")?
+        Ok(())
     }
 
-    async fn read_response(&mut self) -> Result<Option<Telemetry>> {
+    /// Read controller messages until the response for `request_id` arrives or `response_timeout` expires.
+    async fn read_until_response(
+        &mut self,
+        request_id: RequestId,
+        response_timeout: Duration,
+    ) -> Result<Vec<ControllerMessage>> {
+        let deadline = Instant::now() + response_timeout;
+        let mut messages = Vec::new();
+
+        loop {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let message = timeout(remaining, self.read_one_controller_message())
+                .await
+                .context("timed out waiting for a controller response from the Pico serial link")??;
+            let is_match = matches!(
+                message,
+                ControllerMessage::Response(ref response) if response.request_id == request_id
+            );
+            messages.push(message);
+
+            if is_match {
+                return Ok(messages);
+            }
+        }
+    }
+
+    /// Read and decode the next controller message from the serial port.
+    async fn read_one_controller_message(&mut self) -> Result<ControllerMessage> {
         let mut read_buffer = [0u8; READ_BUFFER_LEN];
 
         loop {
@@ -327,10 +540,10 @@ impl SerialPicoTransport {
             }
 
             for byte in &read_buffer[..read] {
-                if let Some(message) = self.bridge.push_rx_byte(*byte)? {
+                if let Some(message) = self.bridge.push_rx_byte_lossy(*byte)? {
                     return match message {
-                        WireMessage::Telemetry(telemetry) => Ok(Some(telemetry)),
-                        WireMessage::Command(_) => bail!("serial transport received a command from the Pico side"),
+                        WireMessage::Controller(message) => Ok(message),
+                        WireMessage::Host(_) => bail!("serial transport received a host message from the Pico side"),
                     };
                 }
             }
@@ -342,27 +555,24 @@ impl SerialPicoTransport {
 mod tests {
     use mortimmy_core::Mode;
     use mortimmy_protocol::messages::{
-        command::Command,
-        commands::{DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand},
-        telemetry::{
-            ControllerCapabilities, ControllerRole, ForwardRangeTelemetry, StatusTelemetry,
-        },
+        ControllerStatus, RequestPayload,
+        commands::{ParameterKey, ParameterUpdate},
+        telemetry::{ControllerCapabilities, ControllerRole},
     };
 
-    use super::{controller_accepts_command, duplicate_controller_role};
+    use super::{controller_accepts_control, controller_accepts_request, duplicate_controller_role};
     use crate::brain::transport::ConnectedController;
 
     fn controller(device_path: &str, controller_role: ControllerRole, capabilities: ControllerCapabilities) -> ConnectedController {
         ConnectedController {
             device_path: device_path.to_string(),
-            status: StatusTelemetry {
+            status: ControllerStatus {
                 mode: Mode::Teleop,
                 controller_role,
                 capabilities,
                 uptime_ms: 0,
                 link_quality: 100,
                 error: None,
-                ranges: ForwardRangeTelemetry::default(),
             },
         }
     }
@@ -377,22 +587,10 @@ mod tests {
         let audio = controller(
             "/dev/ttyUSB1",
             ControllerRole::AudioController,
-            ControllerCapabilities::AUDIO_OUTPUT.union(ControllerCapabilities::TEXT_DISPLAY),
+            ControllerCapabilities::AUDIO_OUTPUT,
         );
-        let command = Command::SetDesiredState(DesiredStateCommand::new(
-            Mode::Teleop,
-            DriveCommand {
-                left: mortimmy_core::PwmTicks(0),
-                right: mortimmy_core::PwmTicks(0),
-            },
-            ServoCommand {
-                pan: mortimmy_core::ServoTicks(0),
-                tilt: mortimmy_core::ServoTicks(0),
-            },
-        ));
-
-        assert!(controller_accepts_command(motion.status, &command));
-        assert!(!controller_accepts_command(audio.status, &command));
+        assert!(controller_accepts_control(motion.status));
+        assert!(!controller_accepts_control(audio.status));
     }
 
     #[test]
@@ -407,19 +605,40 @@ mod tests {
             ControllerRole::AudioController,
             ControllerCapabilities::AUDIO_OUTPUT,
         );
-        let audio_param = Command::SetParam(ParameterUpdate {
+        let audio_param = RequestPayload::SetParam(ParameterUpdate {
             key: ParameterKey::AudioChunkSamples,
             value: 240,
         });
-        let timeout_param = Command::SetParam(ParameterUpdate {
+        let timeout_param = RequestPayload::SetParam(ParameterUpdate {
             key: ParameterKey::LinkTimeoutMs,
             value: 500,
         });
 
-        assert!(!controller_accepts_command(motion.status, &audio_param));
-        assert!(controller_accepts_command(audio.status, &audio_param));
-        assert!(controller_accepts_command(motion.status, &timeout_param));
-        assert!(controller_accepts_command(audio.status, &timeout_param));
+        assert!(!controller_accepts_request(motion.status, &audio_param));
+        assert!(controller_accepts_request(audio.status, &audio_param));
+        assert!(controller_accepts_request(motion.status, &timeout_param));
+        assert!(controller_accepts_request(audio.status, &timeout_param));
+    }
+
+    #[test]
+    fn display_parameters_route_to_motion_controller_only() {
+        let motion = controller(
+            "/dev/ttyUSB0",
+            ControllerRole::MotionController,
+            ControllerCapabilities::TEXT_DISPLAY,
+        );
+        let audio = controller(
+            "/dev/ttyUSB1",
+            ControllerRole::AudioController,
+            ControllerCapabilities::AUDIO_OUTPUT,
+        );
+        let display_param = RequestPayload::SetParam(ParameterUpdate {
+            key: ParameterKey::TrellisBrightness,
+            value: 32,
+        });
+
+        assert!(controller_accepts_request(motion.status, &display_param));
+        assert!(!controller_accepts_request(audio.status, &display_param));
     }
 
     #[test]

@@ -3,9 +3,12 @@ use std::collections::BTreeMap;
 use anyhow::{Result, anyhow};
 use mortimmy_core::{Mode, ServoTicks};
 use mortimmy_protocol::messages::{
-    command::Command,
+    ControllerMessage, ControllerStatus, ControlMessage, ReportConfig, ReportKind,
+    ReportPayload, RequestPayload,
     commands::ServoCommand,
-    telemetry::{ForwardRangeTelemetry, RangeSensorPosition, RangeTelemetry, Telemetry},
+    telemetry::{
+        ControllerCapabilities, ForwardRangeTelemetry, RangeSensorPosition, RangeTelemetry,
+    },
 };
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use tokio::time::{Duration, Instant};
@@ -48,6 +51,8 @@ pub struct RobotBrain {
     last_contact_at: Instant,
     last_desired_state_at: Option<Instant>,
     applied_link_timeout_ms: Option<u32>,
+    applied_range_report_interval_ms: Option<u32>,
+    next_control_generation: u32,
 }
 
 impl RobotBrain {
@@ -62,6 +67,7 @@ impl RobotBrain {
         Self::with_nexo(router, transport, telemetry, session, NexoConfig::default())
     }
 
+    /// Construct the robot brain with explicit Nexo gateway configuration in `nexo_config`.
     pub fn with_nexo(
         router: RouterPolicy,
         transport: BrainTransport,
@@ -94,6 +100,8 @@ impl RobotBrain {
             last_contact_at: now,
             last_desired_state_at: None,
             applied_link_timeout_ms: None,
+            applied_range_report_interval_ms: None,
+            next_control_generation: 1,
         }
     }
 
@@ -130,6 +138,7 @@ impl RobotBrain {
                         self.active_control_state = ControlState::default();
                         self.last_desired_state_at = None;
                         self.applied_link_timeout_ms = None;
+                        self.applied_range_report_interval_ms = None;
                         output.set_connection_status(format!(
                             "disconnected; retrying in {} ms",
                             self.reconnect_interval.as_millis()
@@ -172,6 +181,17 @@ impl RobotBrain {
                         continue;
                     }
                 }
+            }
+
+            if let Err(error) = self.drain_controller_messages(Duration::ZERO, output).await {
+                self.handle_transport_failure(
+                    input,
+                    output,
+                    format!(
+                        "pico transport receive failed; pausing operator input until reconnect: {error}"
+                    ),
+                )?;
+                continue;
             }
 
             let events = self.collect_input_events(input, self.input_poll_interval)?;
@@ -234,6 +254,7 @@ impl RobotBrain {
         self.active_controllers.values()
     }
 
+    /// Log the status snapshots already discovered by the active transport.
     async fn query_controller_status<O>(&mut self, output: &mut O) -> Result<()>
     where
         O: SessionOutput,
@@ -246,14 +267,26 @@ impl RobotBrain {
 
         for controller in controllers {
             self.last_contact_at = Instant::now();
-            self.handle_telemetry(Telemetry::Status(controller.status), output)?;
+            self.log_controller_status(controller.status, output)?;
         }
 
         Ok(())
     }
 
-    fn desired_state_command(&self) -> Command {
+    /// Emit one status log entry for the discovered `status` snapshot.
+    fn log_controller_status<O>(&mut self, status: ControllerStatus, output: &mut O) -> Result<()>
+    where
+        O: SessionOutput,
+    {
+        output.log(LogLevel::Info, format!("controller status: {status:?}"))
+    }
+
+    /// Build the next outbound control snapshot and advance the control generation counter.
+    fn desired_state_command(&mut self) -> ControlMessage {
+        let generation = self.next_control_generation;
+        self.next_control_generation = self.next_control_generation.wrapping_add(1);
         self.router.desired_state_command(
+            generation,
             self.desired_mode,
             self.active_control_state.drive,
             self.desired_servo,
@@ -281,39 +314,97 @@ impl RobotBrain {
         timeout_ms.min(u128::from(u32::MAX)) as u32
     }
 
-    async fn set_link_timeout_raw(&mut self, milliseconds: u32) -> Result<Option<Telemetry>> {
+    /// Return the configured range report cadence derived from the telemetry publish interval.
+    fn desired_range_report_interval_ms(&self) -> u32 {
+        self.telemetry
+            .config
+            .publish_interval_ms
+            .max(1)
+            .min(u64::from(u32::MAX)) as u32
+    }
+
+    /// Return whether any connected controller exposes `capability`.
+    fn controller_has_capability(&self, capability: ControllerCapabilities) -> bool {
+        self.transport
+            .connected_controllers()
+            .into_iter()
+            .any(|controller| controller.status.capabilities.contains(capability))
+    }
+
+    /// Push a link-timeout update when `milliseconds` differs from the applied value.
+    async fn set_link_timeout_raw(&mut self, milliseconds: u32) -> Result<Vec<ControllerMessage>> {
         if self.applied_link_timeout_ms == Some(milliseconds) {
-            return Ok(None);
+            return Ok(Vec::new());
         }
 
-        let response = self
+        let messages = self
             .transport
-            .exchange_command(RouterPolicy::link_timeout_update(milliseconds))
+            .send_request(RouterPolicy::link_timeout_update(milliseconds))
             .await?;
         self.applied_link_timeout_ms = Some(milliseconds);
         self.last_contact_at = Instant::now();
-        Ok(response)
+        Ok(messages)
     }
 
+    /// Push range report configuration for `min_interval_ms` when range sensors are present.
+    async fn set_range_report_config_raw(
+        &mut self,
+        min_interval_ms: u32,
+    ) -> Result<Vec<ControllerMessage>> {
+        if !self.controller_has_capability(ControllerCapabilities::RANGE_SENSOR) {
+            return Ok(Vec::new());
+        }
+
+        if self.applied_range_report_interval_ms == Some(min_interval_ms) {
+            return Ok(Vec::new());
+        }
+
+        let messages = self
+            .transport
+            .send_request(RequestPayload::ConfigureReports(ReportConfig {
+                report: ReportKind::Range,
+                min_interval_ms,
+                emit_on_change: true,
+            }))
+            .await?;
+        self.applied_range_report_interval_ms = Some(min_interval_ms);
+        self.last_contact_at = Instant::now();
+        Ok(messages)
+    }
+
+    /// Ensure the controller link timeout matches the current desired-state refresh policy.
     async fn ensure_link_timeout_configured<O>(&mut self, output: &mut O) -> Result<()>
     where
         O: SessionOutput,
     {
-        if let Some(telemetry) = self
+        let messages = self
             .set_link_timeout_raw(self.desired_state_link_timeout_ms())
-            .await?
-        {
-            self.handle_telemetry(telemetry, output)?;
-        }
+            .await?;
+        self.handle_controller_messages(messages, output)?;
 
         Ok(())
     }
 
+    /// Ensure range report cadence matches the current host telemetry publish interval.
+    async fn ensure_range_reports_configured<O>(&mut self, output: &mut O) -> Result<()>
+    where
+        O: SessionOutput,
+    {
+        let messages = self
+            .set_range_report_config_raw(self.desired_range_report_interval_ms())
+            .await?;
+        self.handle_controller_messages(messages, output)?;
+
+        Ok(())
+    }
+
+    /// Rebuild host-owned desired state after a transport reconnect at `now`.
     fn restore_desired_state_after_connect(&mut self, now: Instant) {
         self.autonomy.reset();
         self.active_control_state = ControlState::default();
         self.last_desired_state_at = None;
         self.applied_link_timeout_ms = None;
+        self.applied_range_report_interval_ms = None;
         self.last_contact_at = now;
 
         match self.desired_mode {
@@ -331,11 +422,10 @@ impl RobotBrain {
         }
     }
 
-    async fn exchange_desired_state_raw(&mut self) -> Result<Option<Telemetry>> {
-        let response = self
-            .transport
-            .exchange_command(self.desired_state_command())
-            .await?;
+    /// Send the current desired control snapshot and return the immediate controller messages.
+    async fn exchange_desired_state_raw(&mut self) -> Result<Vec<ControllerMessage>> {
+        let control = self.desired_state_command();
+        let response = self.transport.send_control(control).await?;
 
         let now = Instant::now();
         self.last_contact_at = now;
@@ -344,17 +434,27 @@ impl RobotBrain {
         Ok(response)
     }
 
+    /// Configure link behavior and exchange the latest desired control state.
     async fn exchange_desired_state<O>(&mut self, output: &mut O) -> Result<()>
     where
         O: SessionOutput,
     {
         self.ensure_link_timeout_configured(output).await?;
+        self.ensure_range_reports_configured(output).await?;
 
-        if let Some(telemetry) = self.exchange_desired_state_raw().await? {
-            self.handle_telemetry(telemetry, output)?;
-        }
+        let messages = self.exchange_desired_state_raw().await?;
+        self.handle_controller_messages(messages, output)?;
 
         Ok(())
+    }
+
+    /// Drain unsolicited controller messages for up to `timeout` and apply them to the session.
+    async fn drain_controller_messages<O>(&mut self, timeout: Duration, output: &mut O) -> Result<()>
+    where
+        O: SessionOutput,
+    {
+        let messages = self.transport.drain_messages(timeout).await?;
+        self.handle_controller_messages(messages, output)
     }
 
     fn refresh_active_control_hold<I>(&mut self, input: &mut I, had_active_drive: bool) -> Result<()>
@@ -630,6 +730,8 @@ impl RobotBrain {
         self.latest_ranges = ForwardRangeTelemetry::default();
         self.last_desired_state_at = None;
         self.applied_link_timeout_ms = None;
+        self.applied_range_report_interval_ms = None;
+        self.next_control_generation = 1;
         output.set_connection_status(format!(
             "disconnected; retrying in {} ms",
             self.reconnect_interval.as_millis()
@@ -642,32 +744,53 @@ impl RobotBrain {
         Ok(())
     }
 
-    fn handle_telemetry<O>(&mut self, telemetry: Telemetry, output: &mut O) -> Result<()>
+    /// Apply a batch of controller `messages` to host state, output, and telemetry fanout.
+    fn handle_controller_messages<O>(&mut self, messages: Vec<ControllerMessage>, output: &mut O) -> Result<()>
     where
         O: SessionOutput,
     {
-        if let Some(ranges) = updated_ranges(self.latest_ranges, &telemetry) {
+        for message in messages {
+            self.handle_controller_message(message, output)?;
+        }
+
+        Ok(())
+    }
+
+    /// Apply one inbound controller `message` to host state, output, and telemetry fanout.
+    fn handle_controller_message<O>(&mut self, message: ControllerMessage, output: &mut O) -> Result<()>
+    where
+        O: SessionOutput,
+    {
+        self.last_contact_at = Instant::now();
+
+        if let Some(ranges) = updated_ranges(self.latest_ranges, &message) {
             self.latest_ranges = ranges;
             output.set_ranges(ranges)?;
         }
         output.log(
             LogLevel::Info,
-            format!("telemetry {}: {telemetry:?}", telemetry.kind()),
+            format!("controller {}: {message:?}", message.kind()),
         )?;
-        self.telemetry.publish(&telemetry);
+        self.telemetry.publish(&message);
         Ok(())
     }
 }
 
-fn updated_ranges(current: ForwardRangeTelemetry, telemetry: &Telemetry) -> Option<ForwardRangeTelemetry> {
-    match telemetry {
-        Telemetry::Status(status) => Some(status.ranges),
-        Telemetry::DesiredState(desired_state) => Some(desired_state.ranges),
-        Telemetry::Range(range) => Some(merge_range_sample(current, *range)),
-        _ => None,
+/// Return the updated forward-range snapshot after applying `message`, if it carries range data.
+fn updated_ranges(
+    current: ForwardRangeTelemetry,
+    message: &ControllerMessage,
+) -> Option<ForwardRangeTelemetry> {
+    match message {
+        ControllerMessage::Report(report) => match report.payload {
+            ReportPayload::Range(range) => Some(merge_range_sample(current, range)),
+            _ => None,
+        },
+        ControllerMessage::Response(_) | ControllerMessage::Event(_) => None,
     }
 }
 
+/// Merge one `range` sample into the forward-range snapshot `ranges`.
 fn merge_range_sample(mut ranges: ForwardRangeTelemetry, range: RangeTelemetry) -> ForwardRangeTelemetry {
     match range.sensor {
         RangeSensorPosition::ForwardLeft => ranges.forward_left = Some(range),
@@ -684,8 +807,10 @@ mod tests {
     use anyhow::{Result, anyhow};
     use mortimmy_core::{Mode, ServoTicks};
     use mortimmy_protocol::messages::{
+        ControllerMessage, ControllerResponsePayload, ReportMessage, ReportPayload,
+        RequestOutcome,
         commands::ServoCommand,
-        telemetry::{ForwardRangeTelemetry, RangeSensorPosition, RangeTelemetry, Telemetry},
+        telemetry::{ForwardRangeTelemetry, RangeSensorPosition, RangeTelemetry},
     };
     use tokio::time::Instant;
 
@@ -764,7 +889,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn desired_state_exchange_returns_motor_state_telemetry() {
+    async fn desired_state_exchange_returns_control_applied_report() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
             BrainTransport::from_kind(
@@ -782,18 +907,49 @@ mod tests {
             .await
             .unwrap();
 
-        match brain.exchange_desired_state_raw().await.unwrap() {
-            Some(Telemetry::DesiredState(telemetry)) => {
-                assert_eq!(telemetry.mode, Mode::Teleop);
-                assert_eq!(telemetry.drive.left_pwm.0, 0);
-                assert_eq!(telemetry.drive.right_pwm.0, 0);
-            }
-            other => panic!("unexpected brain step: {other:?}"),
-        }
+        let messages = brain.exchange_desired_state_raw().await.unwrap();
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            ControllerMessage::Report(ReportMessage {
+                payload: ReportPayload::ControlApplied(report),
+            }) if report.mode == Mode::Teleop && report.drive.left_pwm.0 == 0 && report.drive.right_pwm.0 == 0
+        )));
     }
 
     #[tokio::test]
-    async fn stop_path_returns_default_desired_state_telemetry() {
+    async fn range_reports_are_configured_from_telemetry_interval() {
+        let mut telemetry_config = TelemetryConfig::default();
+        telemetry_config.publish_interval_ms = 125;
+        let mut brain = RobotBrain::new(
+            RouterPolicy::default(),
+            BrainTransport::from_kind(
+                TransportBackendKind::Loopback,
+                SerialConfig::default(),
+                Duration::from_secs(2),
+            )
+            .unwrap(),
+            TelemetryFanout::new(telemetry_config),
+            SessionConfig::default(),
+        );
+
+        let messages = brain
+            .set_range_report_config_raw(brain.desired_range_report_interval_ms())
+            .await
+            .unwrap();
+
+        assert_eq!(brain.applied_range_report_interval_ms, Some(125));
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            ControllerMessage::Response(response)
+                if matches!(
+                    response.payload,
+                    ControllerResponsePayload::ReportConfig(RequestOutcome { error: None })
+                )
+        )));
+    }
+
+    #[tokio::test]
+    async fn stop_path_returns_default_control_applied_report() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
             BrainTransport::from_kind(
@@ -826,18 +982,17 @@ mod tests {
             .await
             .unwrap();
 
-        match brain.exchange_desired_state_raw().await.unwrap() {
-            Some(Telemetry::DesiredState(telemetry)) => {
-                assert_eq!(telemetry.mode, Mode::Teleop);
-                assert_eq!(telemetry.drive.left_pwm.0, 0);
-                assert_eq!(telemetry.drive.right_pwm.0, 0);
-            }
-            other => panic!("unexpected brain step: {other:?}"),
-        }
+        let messages = brain.exchange_desired_state_raw().await.unwrap();
+        assert!(messages.iter().any(|message| matches!(
+            message,
+            ControllerMessage::Report(ReportMessage {
+                payload: ReportPayload::ControlApplied(report),
+            }) if report.mode == Mode::Teleop && report.drive.left_pwm.0 == 0 && report.drive.right_pwm.0 == 0
+        )));
     }
 
     #[tokio::test]
-    async fn handle_telemetry_updates_ranges_from_latest_range_sample() {
+    async fn handle_controller_message_updates_ranges_from_latest_range_sample() {
         let mut brain = RobotBrain::new(
             RouterPolicy::default(),
             BrainTransport::from_kind(
@@ -852,11 +1007,13 @@ mod tests {
         let mut output = RecordingOutput::default();
 
         brain
-            .handle_telemetry(
-                Telemetry::Range(RangeTelemetry {
-                    sensor: RangeSensorPosition::ForwardLeft,
-                    distance_mm: mortimmy_core::Millimeters(412),
-                    quality: 100,
+            .handle_controller_message(
+                ControllerMessage::Report(ReportMessage {
+                    payload: ReportPayload::Range(RangeTelemetry {
+                        sensor: RangeSensorPosition::ForwardLeft,
+                        distance_mm: mortimmy_core::Millimeters(412),
+                        quality: 100,
+                    }),
                 }),
                 &mut output,
             )

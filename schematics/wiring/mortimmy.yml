@@ -12,6 +12,11 @@ connectors:
     type: UBEC / buck
     subtype: 3A-6S in, 5 V 3 A out
 
+  REG2:
+    pinlabels: [ "VIN+", "VIN-", "VOUT+", "VOUT-" ]
+    type: UBEC / buck
+    subtype: 3A-6S in, 6 V servo rail out
+
   RPI_PWR:
     pinlabels: [ "5V_IN", "GND" ]
     type: Raspberry Pi 3B V1.2
@@ -29,24 +34,39 @@ connectors:
 
   PICO_AUDIO_USB:
     pinlabels: [ "VBUS", "D-", "D+", "GND", "SHELL" ]
-    type: Pico 2 W + Audio Pack
+    type: Pico 2 W
     subtype: USB device
 
-  PICO_AUDIO_LCD:
+  PICO_AUDIO_I2S:
+    pinlabels: [ "GP9 DIN", "GP10 BCK", "GP11 LRCK", "GP29 AMP_EN", "PWR", "GND" ]
+    type: Pico 2 W
+    subtype: Audio Pack fly-lead breakout
+    notes: Only these signals plus power and ground are needed when the Audio Pack
+      is not stacked directly on the Pico.
+
+  AUDIO_PACK1:
+    pinlabels: [ "DIN", "BCK", "LRCK", "AMP_EN", "PWR", "GND" ]
+    type: Pimoroni Pico Audio Pack
+    subtype: PCM5100A DAC + headphone amp
+    notes: If the pack is stacked directly on the Pico, this fly-lead harness
+      collapses into the board-to-board header.
+
+  PICO_CTRL_LCD:
     pinlabels:
       [
-        "P40 5V",
-        "GP2 RS",
-        "GP3 E",
-        "GP4 D4",
-        "GP5 D5",
-        "GP6 D6",
-        "GP7 D7",
-        "P8 GND",
+        "VBUS P40 5V",
+        "GP20 P26 RS",
+        "GP21 P27 E",
+        "GP22 P29 D4",
+        "GP26 P31 D5",
+        "GP27 P32 D6",
+        "GP28 P34 D7",
+        "GND P38",
       ]
-    type: Pico 2 W + Audio Pack
+    type: Pico LiPo 2
     subtype: LCD GPIO
-    notes: GP9-GP11 stay reserved for I2S audio.
+    notes: These are the six remaining free GPIO once motors, the HC-SR04 pair, and
+      the planned GP18 and GP19 servo outputs are reserved.
 
   PICO_CTRL_USB:
     pinlabels: [ "VBUS", "D-", "D+", "GND", "SHELL" ]
@@ -95,6 +115,13 @@ connectors:
     type: Pico LiPo 2
     subtype: ultrasonic GPIO
     notes: Two HC-SR04 modules share one 4-channel BSS138 level shifter.
+
+  PICO_CTRL_SERVO:
+    pinlabels: [ "GP18 P25 PAN_PWM", "GP19 P26 TILT_PWM", "GND P24" ]
+    type: Pico LiPo 2
+    subtype: planned pan / tilt servo GPIO
+    notes: Reserved end-state servo PWM outputs. Not yet bound in motion-controller
+      firmware.
 
   DRV_LEFT_CTRL:
     pinlabels: [ "ENA", "IN1", "IN2", "IN3", "IN4", "ENB", "GND" ]
@@ -210,6 +237,28 @@ connectors:
     type: Potentiometer
     subtype: 10 kOhm contrast trim
 
+  SERVO_BUS_PAN:
+    pinlabels: [ "PWM", "6V", "GND" ]
+    type: 3-pin servo header
+    subtype: pan breakout
+    notes: Combines Pico PWM with the dedicated 6 V servo rail.
+
+  SERVO_BUS_TILT:
+    pinlabels: [ "PWM", "6V", "GND" ]
+    type: 3-pin servo header
+    subtype: tilt breakout
+    notes: Combines Pico PWM with the dedicated 6 V servo rail.
+
+  SERVO_PAN:
+    pinlabels: [ "PWM", "V+", "GND" ]
+    type: Micro servo
+    subtype: pan axis
+
+  SERVO_TILT:
+    pinlabels: [ "PWM", "V+", "GND" ]
+    type: Micro servo
+    subtype: tilt axis
+
 cables:
   BAT_TO_REG:
     category: bundle
@@ -249,7 +298,13 @@ cables:
     colors: [ RD, WH, GN, BK ]
     shield: true
 
-  AUDIO_LCD_MAIN:
+  AUDIO_PACK_FLYLEADS:
+    category: bundle
+    length: 0.06
+    gauge: 28 AWG
+    colors: [ BU, YE, OG, GY, RD, BK ]
+
+  CTRL_LCD_MAIN:
     category: bundle
     length: 0.18
     gauge: 26 AWG
@@ -383,6 +438,48 @@ cables:
     gauge: 20 AWG
     colors: [ GN, BK ]
 
+  BAT_TO_SERVO_REG:
+    category: bundle
+    length: 0.20
+    gauge: 18 AWG
+    colors: [ RD, BK ]
+
+  SERVO_PAN_PWR:
+    category: bundle
+    length: 0.16
+    gauge: 24 AWG
+    colors: [ RD, BK ]
+
+  SERVO_TILT_PWR:
+    category: bundle
+    length: 0.16
+    gauge: 24 AWG
+    colors: [ RD, BK ]
+
+  SERVO_PAN_CTRL:
+    category: bundle
+    length: 0.18
+    gauge: 26 AWG
+    colors: [ YE, BK ]
+
+  SERVO_TILT_CTRL:
+    category: bundle
+    length: 0.18
+    gauge: 26 AWG
+    colors: [ VT, BK ]
+
+  PAN_SERVO_HARNESS:
+    category: bundle
+    length: 0.20
+    gauge: 24 AWG
+    colors: [ YE, RD, BK ]
+
+  TILT_SERVO_HARNESS:
+    category: bundle
+    length: 0.20
+    gauge: 24 AWG
+    colors: [ VT, RD, BK ]
+
 connections:
   - - BAT1: [ 1-2 ]
     - BAT_TO_REG: [ 1-2 ]
@@ -396,6 +493,10 @@ connections:
     - BAT_TO_DRV_RIGHT: [ 1-2 ]
     - DRV_RIGHT_PWR: [ 1-2 ]
 
+  - - BAT1: [ 1-2 ]
+    - BAT_TO_SERVO_REG: [ 1-2 ]
+    - REG2: [ 1-2 ]
+
   - - REG1: [ 3-4 ]
     - REG_TO_PI: [ 1-2 ]
     - RPI_PWR: [ 1-2 ]
@@ -408,11 +509,15 @@ connections:
     - USB_AUDIO: s
     - PICO_AUDIO_USB: 5
 
-  - - PICO_AUDIO_LCD: [ 1-8 ]
-    - AUDIO_LCD_MAIN: [ 1-8 ]
+  - - PICO_AUDIO_I2S: [ 1-6 ]
+    - AUDIO_PACK_FLYLEADS: [ 1-6 ]
+    - AUDIO_PACK1: [ 1-6 ]
+
+  - - PICO_CTRL_LCD: [ 1-8 ]
+    - CTRL_LCD_MAIN: [ 1-8 ]
     - LCD1: [ 2, 4, 6, 11, 12, 13, 14, 1 ]
 
-  - - PICO_AUDIO_LCD: [ 1, 8 ]
+  - - PICO_CTRL_LCD: [ 1, 8 ]
     - LCD_CONTRAST_POT: [ 1-2 ]
     - LCD_CONTRAST: [ 1, 3 ]
 
@@ -420,11 +525,11 @@ connections:
     - LCD_CONTRAST_WIPER: 1
     - LCD1: 3
 
-  - - PICO_AUDIO_LCD: 8
+  - - PICO_CTRL_LCD: 8
     - LCD_RW_GND: 1
     - LCD1: 5
 
-  - - PICO_AUDIO_LCD: [ 1, 8 ]
+  - - PICO_CTRL_LCD: [ 1, 8 ]
     - LCD_BACKLIGHT: [ 1-2 ]
     - LCD1: [ 15-16 ]
 
@@ -503,3 +608,27 @@ connections:
   - - DRV_RIGHT_OUT: [ 3-4 ]
     - RIGHT_REAR_MOTOR: [ 1-2 ]
     - MOTOR_RR: [ 1-2 ]
+
+  - - PICO_CTRL_SERVO: [ 1, 3 ]
+    - SERVO_PAN_CTRL: [ 1-2 ]
+    - SERVO_BUS_PAN: [ 1, 3 ]
+
+  - - PICO_CTRL_SERVO: [ 2, 3 ]
+    - SERVO_TILT_CTRL: [ 1-2 ]
+    - SERVO_BUS_TILT: [ 1, 3 ]
+
+  - - REG2: [ 3-4 ]
+    - SERVO_PAN_PWR: [ 1-2 ]
+    - SERVO_BUS_PAN: [ 2-3 ]
+
+  - - REG2: [ 3-4 ]
+    - SERVO_TILT_PWR: [ 1-2 ]
+    - SERVO_BUS_TILT: [ 2-3 ]
+
+  - - SERVO_BUS_PAN: [ 1-3 ]
+    - PAN_SERVO_HARNESS: [ 1-3 ]
+    - SERVO_PAN: [ 1-3 ]
+
+  - - SERVO_BUS_TILT: [ 1-3 ]
+    - TILT_SERVO_HARNESS: [ 1-3 ]
+    - SERVO_TILT: [ 1-3 ]

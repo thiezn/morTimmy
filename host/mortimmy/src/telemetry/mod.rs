@@ -1,4 +1,4 @@
-use mortimmy_protocol::messages::telemetry::Telemetry;
+use mortimmy_protocol::messages::ControllerMessage;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -33,7 +33,7 @@ impl TelemetryFanout {
         }
     }
 
-    pub fn publish(&mut self, _sample: &Telemetry) {
+    pub fn publish(&mut self, _sample: &ControllerMessage) {
         self.subscribers = self.subscribers.saturating_add(0);
     }
 }

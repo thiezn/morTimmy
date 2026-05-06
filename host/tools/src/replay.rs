@@ -28,8 +28,7 @@ mod tests {
     use mortimmy_protocol::{
         encode_message,
         messages::{
-            WireMessage,
-            command::Command,
+            HostMessage, RequestId, RequestMessage, RequestPayload, WireMessage,
             commands::{AudioChunkCommand, AudioEncoding},
         },
         wrap_payload,
@@ -53,14 +52,17 @@ mod tests {
         let mut samples = Vec::new();
         samples.extend_from_slice(&[9, 8, 7, 6]).unwrap();
 
-        let message = WireMessage::Command(Command::PlayAudio(AudioChunkCommand {
-            utterance_id: 2,
-            chunk_index: 1,
-            sample_rate_hz: 24_000,
-            channels: 1,
-            encoding: AudioEncoding::SignedPcm16Le,
-            is_final_chunk: false,
-            samples,
+        let message = WireMessage::Host(HostMessage::Request(RequestMessage {
+            request_id: RequestId(2),
+            payload: RequestPayload::PlayAudio(AudioChunkCommand {
+                utterance_id: 2,
+                chunk_index: 1,
+                sample_rate_hz: 24_000,
+                channels: 1,
+                encoding: AudioEncoding::SignedPcm16Le,
+                is_final_chunk: false,
+                samples,
+            }),
         }));
 
         let encoded_message = encode_message(&message, &mut payload_buffer).unwrap();

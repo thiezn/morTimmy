@@ -3,13 +3,12 @@ use mortimmy_core::{Mode, PwmTicks, ServoTicks};
 use mortimmy_protocol::{
     decode_message, encode_message, wrap_payload, FrameDecoder,
     messages::{
+        ControllerMessage, ControlMessage, HostMessage, ReportMessage, ReportPayload,
         WireMessage,
-        command::Command,
         commands::{
             AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding,
             DesiredStateCommand, DriveCommand, ServoCommand,
         },
-        telemetry::Telemetry,
     },
 };
 use mortimmy_rp2350::FirmwareScaffold;
@@ -21,14 +20,17 @@ fn capture_roundtrip_matches_protocol_contract() {
         samples.push((sample as i16) * 2).unwrap();
     }
 
-    let message = WireMessage::Command(Command::PlayAudio(AudioChunkCommand {
-        utterance_id: 11,
-        chunk_index: 1,
-        sample_rate_hz: 24_000,
-        channels: 1,
-        encoding: AudioEncoding::SignedPcm16Le,
-        is_final_chunk: false,
-        samples,
+    let message = WireMessage::Host(HostMessage::Request(mortimmy_protocol::messages::RequestMessage {
+        request_id: mortimmy_protocol::messages::RequestId(11),
+        payload: mortimmy_protocol::messages::RequestPayload::PlayAudio(AudioChunkCommand {
+            utterance_id: 11,
+            chunk_index: 1,
+            sample_rate_hz: 24_000,
+            channels: 1,
+            encoding: AudioEncoding::SignedPcm16Le,
+            is_final_chunk: false,
+            samples,
+        }),
     }));
 
     let mut payload_buffer = [0u8; mortimmy_protocol::MAX_PAYLOAD_LEN];
@@ -52,16 +54,19 @@ fn capture_roundtrip_matches_protocol_contract() {
 
 #[test]
 fn desired_state_roundtrip_matches_protocol_contract() {
-    let message = WireMessage::Command(Command::SetDesiredState(DesiredStateCommand::new(
-        Mode::Teleop,
-        DriveCommand {
-            left: PwmTicks(300),
-            right: PwmTicks(-180),
-        },
-        ServoCommand {
-            pan: ServoTicks(24),
-            tilt: ServoTicks(36),
-        },
+    let message = WireMessage::Host(HostMessage::Control(ControlMessage::new(
+        100,
+        DesiredStateCommand::new(
+            Mode::Teleop,
+            DriveCommand {
+                left: PwmTicks(300),
+                right: PwmTicks(-180),
+            },
+            ServoCommand {
+                pan: ServoTicks(24),
+                tilt: ServoTicks(36),
+            },
+        ),
     )));
 
     let mut payload_buffer = [0u8; mortimmy_protocol::MAX_PAYLOAD_LEN];
@@ -110,8 +115,8 @@ fn firmware_scaffold_uses_latest_desired_state() {
         },
     );
 
-    scaffold.handle_command(Command::SetDesiredState(first));
-    let response = scaffold.handle_command(Command::SetDesiredState(second));
+    scaffold.handle_host_message(HostMessage::Control(ControlMessage::new(1, first)));
+    let response = scaffold.handle_host_message(HostMessage::Control(ControlMessage::new(2, second)));
 
     assert_eq!(scaffold.control.mode, Mode::Teleop);
     assert_eq!(scaffold.control.drive.left_pwm, PwmTicks(-180));
@@ -120,6 +125,8 @@ fn firmware_scaffold_uses_latest_desired_state() {
     assert_eq!(scaffold.control.servo.tilt, ServoTicks(36));
     assert_eq!(
         response,
-        Some(Telemetry::DesiredState(scaffold.desired_state_telemetry()))
+        Some(ControllerMessage::Report(ReportMessage {
+            payload: ReportPayload::ControlApplied(scaffold.control_applied_report(2)),
+        }))
     );
 }

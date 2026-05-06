@@ -1,12 +1,30 @@
 #![cfg_attr(all(target_arch = "arm", target_os = "none"), no_std)]
 
-//! Board-aware firmware scaffold for the Pimoroni Pico LiPo 2 and RP2350B.
+#[cfg(all(
+    target_arch = "arm",
+    target_os = "none",
+    feature = "board-motion-controller",
+    feature = "board-audio-controller"
+))]
+compile_error!("select exactly one firmware board feature when building the embedded image");
+#[cfg(all(
+    target_arch = "arm",
+    target_os = "none",
+    not(any(
+        feature = "board-motion-controller",
+        feature = "board-audio-controller"
+    ))
+))]
+compile_error!("select one firmware board feature when building the embedded image");
+
+// Board-aware firmware scaffold for the Pico LiPo 2 motion image and Pico 2 W audio image.
 
 pub mod actuators;
 pub mod board;
 pub mod control;
 pub mod link_rx;
 pub mod link_tx;
+pub mod runtime;
 pub mod sensors;
 pub mod ui;
 pub mod usb;
@@ -14,12 +32,12 @@ pub mod usb;
 use mortimmy_core::{CoreError, Millimeters, Mode};
 use mortimmy_drivers::PadEvent;
 use mortimmy_protocol::messages::{
-    WireMessage,
-    command::Command,
+    AudioCommandResponse, ControlAppliedReport, ControllerEvent, ControllerMessage,
+    ControllerResponse, ControllerResponsePayload, ControllerStatus, HostMessage, ReportConfig,
+    ReportMessage, ReportPayload, RequestMessage, RequestOutcome, RequestPayload, WireMessage,
     commands::{ParameterKey, ParameterUpdate},
     telemetry::{
-        AudioStatusTelemetry, ControllerCapabilities, ControllerRole, DesiredStateTelemetry,
-        RangeSensorPosition, StatusTelemetry, Telemetry,
+        AudioStatusTelemetry, ControllerCapabilities, ControllerRole, RangeSensorPosition,
     },
 };
 
@@ -222,74 +240,104 @@ impl FirmwareScaffold {
         }
     }
 
-    /// Apply a protocol command to the scaffold and emit any immediate response telemetry.
-    pub fn handle_command(&mut self, command: Command) -> Option<Telemetry> {
-        self.link_rx.record_command(&command);
+    /// Apply a host-originated protocol message and emit any immediate controller reply.
+    pub fn handle_host_message(&mut self, message: HostMessage) -> Option<ControllerMessage> {
+        self.link_rx.record_message(&message);
 
-        let response = match command {
-            Command::SetDesiredState(desired_state) => {
-                self.control.apply_desired_state(desired_state);
-                Some(Telemetry::DesiredState(self.desired_state_telemetry()))
+        let response = match message {
+            HostMessage::Control(control) => {
+                self.control.apply_desired_state(control.desired_state);
+                Some(ControllerMessage::Report(ReportMessage {
+                    payload: ReportPayload::ControlApplied(
+                        self.control_applied_report(control.generation),
+                    ),
+                }))
             }
-            Command::SetParam(update) => {
-                self.apply_parameter(update);
-                Some(Telemetry::Status(self.status_telemetry()))
+            HostMessage::Request(request) => {
+                Some(ControllerMessage::Response(self.handle_request(request)))
             }
-            Command::PlayAudio(command) => match self.audio.enqueue_chunk(&command) {
-                Ok(()) => {
-                    self.link_tx.audio_status_dirty = true;
-                    Some(Telemetry::AudioStatus(self.audio_status_telemetry()))
-                }
-                Err(error) => {
-                    self.control.record_error(error);
-                    Some(Telemetry::Status(self.status_telemetry()))
-                }
-            },
-            Command::SetTrellisLeds(command) => {
-                self.trellis.apply_led_mask(command.led_mask);
-                None
-            }
-            Command::GetStatus => Some(Telemetry::Status(self.status_telemetry())),
         };
 
-        if let Some(telemetry) = response.as_ref() {
-            self.link_tx.record_telemetry(telemetry);
+        if let Some(message) = response.as_ref() {
+            self.link_tx.record_message(message);
         }
 
         response
     }
 
-    /// Apply a complete wire message and convert any response back into a wire message.
-    pub fn apply_wire_message(&mut self, message: WireMessage) -> Option<WireMessage> {
-        match message {
-            WireMessage::Command(command) => {
-                self.handle_command(command).map(WireMessage::Telemetry)
+    /// Handle one correlated `request` and return the matching controller response.
+    fn handle_request(&mut self, request: RequestMessage) -> ControllerResponse {
+        let payload = match request.payload {
+            RequestPayload::GetControllerStatus => {
+                ControllerResponsePayload::ControllerStatus(self.controller_status())
             }
-            WireMessage::Telemetry(_) => None,
+            RequestPayload::SetParam(update) => {
+                ControllerResponsePayload::Parameter(self.apply_parameter(update))
+            }
+            RequestPayload::PlayAudio(command) => {
+                let response = match self.audio.enqueue_chunk(&command) {
+                    Ok(()) => {
+                        self.link_tx.audio_status_dirty = true;
+                        AudioCommandResponse {
+                            status: self.audio_status_telemetry(),
+                            error: None,
+                        }
+                    }
+                    Err(error) => {
+                        self.control.record_error(error);
+                        AudioCommandResponse {
+                            status: self.audio_status_telemetry(),
+                            error: Some(error),
+                        }
+                    }
+                };
+                ControllerResponsePayload::Audio(response)
+            }
+            RequestPayload::SetTrellisLeds(command) => {
+                self.trellis.apply_led_mask(command.led_mask);
+                ControllerResponsePayload::TrellisLeds(RequestOutcome::ok())
+            }
+            RequestPayload::ConfigureReports(config) => {
+                ControllerResponsePayload::ReportConfig(self.configure_report(config))
+            }
+        };
+
+        ControllerResponse {
+            request_id: request.request_id,
+            payload,
         }
     }
 
-    /// Snapshot status telemetry from the current control plane.
-    pub const fn status_telemetry(&self) -> StatusTelemetry {
-        StatusTelemetry {
+    /// Apply a complete wire message and convert any response back into a wire message.
+    pub fn apply_wire_message(&mut self, message: WireMessage) -> Option<WireMessage> {
+        match message {
+            WireMessage::Host(message) => self
+                .handle_host_message(message)
+                .map(WireMessage::Controller),
+            WireMessage::Controller(_) => None,
+        }
+    }
+
+    /// Snapshot controller identity and health from the current control plane.
+    pub const fn controller_status(&self) -> ControllerStatus {
+        ControllerStatus {
             mode: self.control.mode,
             controller_role: active_controller_role(),
             capabilities: active_controller_capabilities(),
             uptime_ms: 0,
             link_quality: DEFAULT_LINK_QUALITY,
             error: self.control.last_error,
-            ranges: self.sensors.ultrasonic.ranges,
         }
     }
 
-    /// Snapshot the applied desired control state.
-    pub const fn desired_state_telemetry(&self) -> DesiredStateTelemetry {
-        DesiredStateTelemetry::new(
+    /// Snapshot the applied desired control state for a reported generation.
+    pub const fn control_applied_report(&self, control_generation: u32) -> ControlAppliedReport {
+        ControlAppliedReport::new(
+            control_generation,
             self.control.mode,
             self.control.drive.telemetry(),
             self.control.servo.telemetry(),
             self.control.last_error,
-            self.sensors.ultrasonic.ranges,
         )
     }
 
@@ -309,38 +357,66 @@ impl FirmwareScaffold {
         }
     }
 
-    /// Record a range measurement and return its telemetry representation.
+    /// Record a range measurement and return its report representation.
     pub fn record_range_measurement(
         &mut self,
         sensor: RangeSensorPosition,
         distance_mm: Millimeters,
         quality: u8,
-    ) -> Telemetry {
-        Telemetry::Range(self.sensors.record_range(sensor, distance_mm, quality))
+    ) -> ControllerMessage {
+        let telemetry = self.sensors.record_range(sensor, distance_mm, quality);
+        self.link_tx.queue_range_sample(sensor);
+        ControllerMessage::Report(ReportMessage {
+            payload: ReportPayload::Range(telemetry),
+        })
     }
 
-    /// Record a battery measurement and return its telemetry representation.
-    pub fn record_battery_measurement(&mut self, millivolts: u16) -> Telemetry {
-        Telemetry::Battery(self.sensors.record_battery(millivolts))
+    /// Record a battery measurement and return its report representation.
+    pub fn record_battery_measurement(&mut self, millivolts: u16) -> ControllerMessage {
+        ControllerMessage::Report(ReportMessage {
+            payload: ReportPayload::Battery(self.sensors.record_battery(millivolts)),
+        })
     }
 
-    /// Record a Trellis pad event and return its telemetry representation.
-    pub fn record_trellis_event(&mut self, event: PadEvent) -> Telemetry {
+    /// Record a Trellis pad event and return its event representation.
+    pub fn record_trellis_event(&mut self, event: PadEvent) -> ControllerMessage {
         self.link_tx.trellis_event_dirty = true;
-        let telemetry = Telemetry::TrellisPad(self.trellis.record_pad_event(event));
-        self.link_tx.record_telemetry(&telemetry);
-        telemetry
+        let message = ControllerMessage::Event(ControllerEvent::TrellisPad(
+            self.trellis.record_pad_event(event),
+        ));
+        self.link_tx.record_message(&message);
+        message
     }
 
-    fn apply_parameter(&mut self, update: ParameterUpdate) {
+    /// Return the next background controller message that should be emitted on the live link.
+    pub fn next_background_message(&mut self, now_ms: u64) -> Option<ControllerMessage> {
+        self.link_tx
+            .next_message(now_ms, self.sensors.ultrasonic.ranges)
+    }
+
+    /// Apply host report cadence `config` to the controller transmit state.
+    fn configure_report(&mut self, config: ReportConfig) -> RequestOutcome {
+        self.link_tx
+            .configure_report(config, self.sensors.ultrasonic.ranges);
+        RequestOutcome::ok()
+    }
+
+    /// Apply one parameter `update` and convert the result into a request outcome.
+    fn apply_parameter(&mut self, update: ParameterUpdate) -> RequestOutcome {
         match self.control.apply_limit_parameter(update) {
-            Ok(true) => {}
+            Ok(true) => RequestOutcome::ok(),
             Ok(false) => {
                 if let Err(error) = self.apply_subsystem_parameter(update) {
                     self.control.record_error(error);
+                    RequestOutcome::from_error(error)
+                } else {
+                    RequestOutcome::ok()
                 }
             }
-            Err(error) => self.control.record_error(error),
+            Err(error) => {
+                self.control.record_error(error);
+                RequestOutcome::from_error(error)
+            }
         }
     }
 
@@ -465,15 +541,15 @@ mod tests {
     use mortimmy_core::Millimeters;
     use mortimmy_drivers::{PadEvent, PadEventKind as DriverPadEventKind, PadIndex};
     use mortimmy_protocol::messages::{
-        WireMessage,
-        command::Command,
+        ControlMessage, ControllerEvent, ControllerMessage, ControllerResponsePayload, HostMessage,
+        ReportConfig, ReportKind, ReportMessage, ReportPayload, RequestId, RequestMessage,
+        RequestOutcome, RequestPayload, WireMessage,
         commands::{
             AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding, DesiredStateCommand,
             DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
         },
         telemetry::{
-            ControllerCapabilities, PadEventKind, RangeSensorPosition, Telemetry,
-            TrellisPadTelemetry,
+            ControllerCapabilities, PadEventKind, RangeSensorPosition, TrellisPadTelemetry,
         },
     };
 
@@ -589,90 +665,134 @@ mod tests {
         assert!(capabilities.contains(ControllerCapabilities::DRIVE));
         assert!(capabilities.contains(ControllerCapabilities::SERVO));
         assert!(capabilities.contains(ControllerCapabilities::RANGE_SENSOR));
+        assert!(capabilities.contains(ControllerCapabilities::TEXT_DISPLAY));
         assert!(!capabilities.contains(ControllerCapabilities::BATTERY_MONITOR));
         assert!(!capabilities.contains(ControllerCapabilities::AUDIO_OUTPUT));
-        assert!(!capabilities.contains(ControllerCapabilities::TEXT_DISPLAY));
     }
 
     #[test]
-    fn desired_state_command_updates_control_state_and_emits_combined_telemetry() {
+    fn desired_state_message_updates_control_state_and_emits_control_applied_report() {
         let mut scaffold = FirmwareScaffold::default();
 
-        let response = scaffold.handle_command(Command::SetDesiredState(DesiredStateCommand::new(
-            mortimmy_core::Mode::Teleop,
-            DriveCommand {
-                left: mortimmy_core::PwmTicks(320),
-                right: mortimmy_core::PwmTicks(-240),
-            },
-            ServoCommand {
-                pan: mortimmy_core::ServoTicks(24),
-                tilt: mortimmy_core::ServoTicks(36),
-            },
+        let response = scaffold.handle_host_message(HostMessage::Control(ControlMessage::new(
+            7,
+            DesiredStateCommand::new(
+                mortimmy_core::Mode::Teleop,
+                DriveCommand {
+                    left: mortimmy_core::PwmTicks(320),
+                    right: mortimmy_core::PwmTicks(-240),
+                },
+                ServoCommand {
+                    pan: mortimmy_core::ServoTicks(24),
+                    tilt: mortimmy_core::ServoTicks(36),
+                },
+            ),
         )));
 
-        assert_eq!(
-            scaffold.link_rx.last_command_kind,
-            Some("set-desired-state")
-        );
-        assert_eq!(scaffold.link_tx.last_telemetry_kind, Some("desired-state"));
+        assert_eq!(scaffold.link_rx.last_message_kind, Some("control"));
+        assert_eq!(scaffold.link_tx.last_message_kind, Some("control-applied"));
         assert_eq!(scaffold.control.mode, mortimmy_core::Mode::Teleop);
         assert_eq!(
             response,
-            Some(Telemetry::DesiredState(scaffold.desired_state_telemetry()))
+            Some(ControllerMessage::Report(ReportMessage {
+                payload: ReportPayload::ControlApplied(scaffold.control_applied_report(7)),
+            }))
         );
     }
 
     #[test]
-    fn status_and_desired_state_telemetry_include_latest_range_samples() {
+    fn range_measurements_are_reported_as_dedicated_messages() {
         let mut scaffold = FirmwareScaffold::default();
-        scaffold.record_range_measurement(RangeSensorPosition::ForwardLeft, Millimeters(287), 100);
-        scaffold.record_range_measurement(RangeSensorPosition::ForwardRight, Millimeters(451), 95);
+        let left = scaffold.record_range_measurement(
+            RangeSensorPosition::ForwardLeft,
+            Millimeters(287),
+            100,
+        );
+        let right = scaffold.record_range_measurement(
+            RangeSensorPosition::ForwardRight,
+            Millimeters(451),
+            95,
+        );
 
         assert_eq!(
-            scaffold.status_telemetry().ranges,
-            mortimmy_protocol::messages::telemetry::ForwardRangeTelemetry {
-                forward_left: Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
-                    sensor: RangeSensorPosition::ForwardLeft,
-                    distance_mm: Millimeters(287),
-                    quality: 100,
-                }),
-                forward_right: Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
-                    sensor: RangeSensorPosition::ForwardRight,
-                    distance_mm: Millimeters(451),
-                    quality: 95,
-                }),
-            }
+            left,
+            ControllerMessage::Report(ReportMessage {
+                payload: ReportPayload::Range(
+                    mortimmy_protocol::messages::telemetry::RangeTelemetry {
+                        sensor: RangeSensorPosition::ForwardLeft,
+                        distance_mm: Millimeters(287),
+                        quality: 100,
+                    }
+                )
+            })
         );
         assert_eq!(
-            scaffold.desired_state_telemetry().ranges,
-            mortimmy_protocol::messages::telemetry::ForwardRangeTelemetry {
-                forward_left: Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
-                    sensor: RangeSensorPosition::ForwardLeft,
-                    distance_mm: Millimeters(287),
-                    quality: 100,
-                }),
-                forward_right: Some(mortimmy_protocol::messages::telemetry::RangeTelemetry {
-                    sensor: RangeSensorPosition::ForwardRight,
-                    distance_mm: Millimeters(451),
-                    quality: 95,
-                }),
-            }
+            right,
+            ControllerMessage::Report(ReportMessage {
+                payload: ReportPayload::Range(
+                    mortimmy_protocol::messages::telemetry::RangeTelemetry {
+                        sensor: RangeSensorPosition::ForwardRight,
+                        distance_mm: Millimeters(451),
+                        quality: 95,
+                    }
+                )
+            })
+        );
+    }
+
+    #[test]
+    fn configure_range_reports_exposes_latest_sample_as_background_message() {
+        let mut scaffold = FirmwareScaffold::default();
+        scaffold.record_range_measurement(RangeSensorPosition::ForwardLeft, Millimeters(287), 100);
+
+        let response = scaffold.handle_host_message(HostMessage::Request(RequestMessage {
+            request_id: RequestId(9),
+            payload: RequestPayload::ConfigureReports(ReportConfig {
+                report: ReportKind::Range,
+                min_interval_ms: 250,
+                emit_on_change: true,
+            }),
+        }));
+
+        assert!(matches!(
+            response,
+            Some(ControllerMessage::Response(response))
+                if response.request_id == RequestId(9)
+                    && matches!(
+                        response.payload,
+                        ControllerResponsePayload::ReportConfig(RequestOutcome { error: None })
+                    )
+        ));
+        assert_eq!(
+            scaffold.next_background_message(250),
+            Some(ControllerMessage::Report(ReportMessage {
+                payload: ReportPayload::Range(
+                    mortimmy_protocol::messages::telemetry::RangeTelemetry {
+                        sensor: RangeSensorPosition::ForwardLeft,
+                        distance_mm: Millimeters(287),
+                        quality: 100,
+                    },
+                )
+            }))
         );
     }
 
     #[test]
     fn enter_fault_state_clears_control_audio_and_trellis() {
         let mut scaffold = FirmwareScaffold::default();
-        scaffold.handle_command(Command::SetDesiredState(DesiredStateCommand::new(
-            mortimmy_core::Mode::Teleop,
-            DriveCommand {
-                left: mortimmy_core::PwmTicks(200),
-                right: mortimmy_core::PwmTicks(200),
-            },
-            ServoCommand {
-                pan: mortimmy_core::ServoTicks(24),
-                tilt: mortimmy_core::ServoTicks(36),
-            },
+        scaffold.handle_host_message(HostMessage::Control(ControlMessage::new(
+            1,
+            DesiredStateCommand::new(
+                mortimmy_core::Mode::Teleop,
+                DriveCommand {
+                    left: mortimmy_core::PwmTicks(200),
+                    right: mortimmy_core::PwmTicks(200),
+                },
+                ServoCommand {
+                    pan: mortimmy_core::ServoTicks(24),
+                    tilt: mortimmy_core::ServoTicks(36),
+                },
+            ),
         )));
         scaffold.audio.queued_chunks = 2;
         scaffold.trellis.apply_led_mask(0x00ff);
@@ -694,13 +814,19 @@ mod tests {
     fn parameter_updates_reconfigure_subsystems() {
         let mut scaffold = FirmwareScaffold::default();
 
-        scaffold.handle_command(Command::SetParam(ParameterUpdate {
-            key: ParameterKey::AudioChunkSamples,
-            value: 120,
+        scaffold.handle_host_message(HostMessage::Request(RequestMessage {
+            request_id: RequestId(1),
+            payload: RequestPayload::SetParam(ParameterUpdate {
+                key: ParameterKey::AudioChunkSamples,
+                value: 120,
+            }),
         }));
-        scaffold.handle_command(Command::SetParam(ParameterUpdate {
-            key: ParameterKey::TrellisBrightness,
-            value: 48,
+        scaffold.handle_host_message(HostMessage::Request(RequestMessage {
+            request_id: RequestId(2),
+            payload: RequestPayload::SetParam(ParameterUpdate {
+                key: ParameterKey::TrellisBrightness,
+                value: 48,
+            }),
         }));
 
         assert_eq!(scaffold.audio.config.chunk_samples, 120);
@@ -712,9 +838,12 @@ mod tests {
     fn invalid_parameter_update_surfaces_status_error() {
         let mut scaffold = FirmwareScaffold::default();
 
-        let response = scaffold.handle_command(Command::SetParam(ParameterUpdate {
-            key: ParameterKey::AudioChunkSamples,
-            value: (AUDIO_CHUNK_CAPACITY_SAMPLES + 1) as i32,
+        let response = scaffold.handle_host_message(HostMessage::Request(RequestMessage {
+            request_id: RequestId(3),
+            payload: RequestPayload::SetParam(ParameterUpdate {
+                key: ParameterKey::AudioChunkSamples,
+                value: (AUDIO_CHUNK_CAPACITY_SAMPLES + 1) as i32,
+            }),
         }));
 
         assert_eq!(
@@ -723,7 +852,14 @@ mod tests {
         );
         assert_eq!(
             response,
-            Some(Telemetry::Status(scaffold.status_telemetry()))
+            Some(ControllerMessage::Response(
+                mortimmy_protocol::messages::ControllerResponse {
+                    request_id: RequestId(3),
+                    payload: ControllerResponsePayload::Parameter(RequestOutcome::from_error(
+                        mortimmy_core::CoreError::InvalidCommand,
+                    )),
+                }
+            ))
         );
     }
 
@@ -735,20 +871,33 @@ mod tests {
             samples.push(sample as i16).unwrap();
         }
 
-        let response = scaffold.handle_command(Command::PlayAudio(AudioChunkCommand {
-            utterance_id: 1,
-            chunk_index: 0,
-            sample_rate_hz: 24_000,
-            channels: 1,
-            encoding: AudioEncoding::SignedPcm16Le,
-            is_final_chunk: true,
-            samples,
+        let response = scaffold.handle_host_message(HostMessage::Request(RequestMessage {
+            request_id: RequestId(4),
+            payload: RequestPayload::PlayAudio(AudioChunkCommand {
+                utterance_id: 1,
+                chunk_index: 0,
+                sample_rate_hz: 24_000,
+                channels: 1,
+                encoding: AudioEncoding::SignedPcm16Le,
+                is_final_chunk: true,
+                samples,
+            }),
         }));
 
         assert_eq!(scaffold.audio.queued_chunks, 1);
         assert_eq!(
             response,
-            Some(Telemetry::AudioStatus(scaffold.audio_status_telemetry()))
+            Some(ControllerMessage::Response(
+                mortimmy_protocol::messages::ControllerResponse {
+                    request_id: RequestId(4),
+                    payload: ControllerResponsePayload::Audio(
+                        mortimmy_protocol::messages::AudioCommandResponse {
+                            status: scaffold.audio_status_telemetry(),
+                            error: None,
+                        },
+                    ),
+                }
+            ))
         );
     }
 
@@ -756,32 +905,41 @@ mod tests {
     fn wire_message_status_command_roundtrips_to_status_response() {
         let mut scaffold = FirmwareScaffold::default();
 
-        let response = scaffold.apply_wire_message(WireMessage::Command(Command::GetStatus));
+        let response =
+            scaffold.apply_wire_message(WireMessage::Host(HostMessage::Request(RequestMessage {
+                request_id: RequestId(5),
+                payload: RequestPayload::GetControllerStatus,
+            })));
 
         assert_eq!(
             response,
-            Some(WireMessage::Telemetry(Telemetry::Status(
-                scaffold.status_telemetry()
+            Some(WireMessage::Controller(ControllerMessage::Response(
+                mortimmy_protocol::messages::ControllerResponse {
+                    request_id: RequestId(5),
+                    payload: ControllerResponsePayload::ControllerStatus(
+                        scaffold.controller_status(),
+                    ),
+                },
             )))
         );
     }
 
     #[test]
-    fn trellis_events_are_converted_into_protocol_telemetry() {
+    fn trellis_events_are_converted_into_protocol_events() {
         let mut scaffold = FirmwareScaffold::default();
 
-        let telemetry = scaffold.record_trellis_event(PadEvent {
+        let message = scaffold.record_trellis_event(PadEvent {
             index: PadIndex::new(4).unwrap(),
             kind: DriverPadEventKind::Pressed,
         });
 
         assert_eq!(
-            telemetry,
-            Telemetry::TrellisPad(TrellisPadTelemetry {
+            message,
+            ControllerMessage::Event(ControllerEvent::TrellisPad(TrellisPadTelemetry {
                 pad_index: 4,
                 event: PadEventKind::Pressed,
-            })
+            }))
         );
-        assert_eq!(scaffold.link_tx.last_telemetry_kind, Some("trellis-pad"));
+        assert_eq!(scaffold.link_tx.last_message_kind, Some("trellis-pad"));
     }
 }

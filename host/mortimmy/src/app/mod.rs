@@ -1,8 +1,8 @@
-use anyhow::{Context, anyhow};
+mod test_runner;
+
+use anyhow::Context;
 use cli_helpers::setup_tracing_from_level;
-use mortimmy_core::Mode;
-use mortimmy_protocol::messages::command::Command;
-use tokio::time::{Duration, Instant};
+use tokio::time::Duration;
 
 use crate::{
     audio::AudioSubsystem,
@@ -10,7 +10,7 @@ use crate::{
     camera::CameraSubsystem,
     cli::{config::ConfigCommand, start::StartCommand, test::TestCommand},
     config::{self, AppConfig, LogLevel},
-    input::{ControllerSelection, DriveIntent, default_controller_registry},
+    input::{ControllerSelection, default_controller_registry},
     telemetry::TelemetryFanout,
     tui::{SessionOutput, TuiConfig, new_session},
     websocket::WebsocketServer,
@@ -128,201 +128,7 @@ pub fn configure(command: ConfigCommand) -> anyhow::Result<()> {
 }
 
 pub async fn test(command: TestCommand) -> anyhow::Result<()> {
-    let config_path = config::resolve_config_path(command.config.as_deref())?;
-    let mut runtime_config: AppConfig = config::load_or_create(&config_path)?;
-
-    if !command.serial_device.is_empty() {
-        runtime_config.serial.device_paths = command.serial_device;
-    }
-    if let Some(serial_baud_rate) = command.serial_baud_rate {
-        runtime_config.serial.baud_rate = serial_baud_rate;
-    }
-    if let Some(response_timeout_ms) = command.response_timeout_ms {
-        runtime_config.session.response_timeout_ms = response_timeout_ms;
-    }
-    if let Some(reconnect_interval_ms) = command.reconnect_interval_ms {
-        runtime_config.session.reconnect_interval_ms = reconnect_interval_ms;
-    }
-
-    let response_timeout = Duration::from_millis(runtime_config.session.response_timeout_ms.max(1));
-    let reconnect_interval =
-        Duration::from_millis(runtime_config.session.reconnect_interval_ms.max(1));
-    let mut transport = BrainTransport::from_kind(
-        command.transport_backend,
-        runtime_config.serial.clone(),
-        response_timeout,
-    )?;
-
-    println!(
-        "test: connecting transport={:?} devices={} baud={}",
-        command.transport_backend,
-        runtime_config.serial.display_paths(),
-        runtime_config.serial.baud_rate,
-    );
-
-    let connect_deadline =
-        Instant::now() + Duration::from_millis(command.connect_timeout_ms.max(1));
-    loop {
-        match transport.try_connect().await {
-            Ok(()) => break,
-            Err(error) => {
-                if Instant::now() >= connect_deadline {
-                    return Err(anyhow!(
-                        "timed out waiting for Pico connection after {} ms: {error:#}",
-                        command.connect_timeout_ms
-                    ));
-                }
-                println!("test: waiting for Pico connection: {error:#}");
-                tokio::time::sleep(reconnect_interval).await;
-            }
-        }
-    }
-
-    for controller in transport.connected_controllers() {
-        println!(
-            "test: connected controller device={} role={:?} capabilities={:?} mode={:?} error={:?}",
-            controller.device_path,
-            controller.status.controller_role,
-            controller.status.capabilities,
-            controller.status.mode,
-            controller.status.error,
-        );
-    }
-
-    exchange_with_trace(&mut transport, "get-status:init", Command::GetStatus).await?;
-
-    let motion_duration = Duration::from_secs(5);
-    let pause_duration = Duration::from_secs(5);
-    let emit_interval = Duration::from_millis(command.step_duration_ms.max(1));
-    let desired_timeout_ms = (emit_interval.as_millis().saturating_mul(3)).max(250) as u32;
-    exchange_with_trace(
-        &mut transport,
-        "set-link-timeout",
-        RouterPolicy::link_timeout_update(desired_timeout_ms),
-    )
-    .await?;
-
-    let router = RouterPolicy::default();
-    let speed = command
-        .drive_speed
-        .min(router.limits.max_drive_pwm.0 as u16)
-        .max(1);
-    let script: [(&str, Option<DriveIntent>); 4] = [
-        (
-            "move forward",
-            Some(DriveIntent {
-                forward: DriveIntent::AXIS_MAX,
-                turn: 0,
-                speed,
-            }),
-        ),
-        (
-            "move backward",
-            Some(DriveIntent {
-                forward: -DriveIntent::AXIS_MAX,
-                turn: 0,
-                speed,
-            }),
-        ),
-        (
-            "move left",
-            Some(DriveIntent {
-                forward: 0,
-                turn: -DriveIntent::AXIS_MAX,
-                speed,
-            }),
-        ),
-        (
-            "move right",
-            Some(DriveIntent {
-                forward: 0,
-                turn: DriveIntent::AXIS_MAX,
-                speed,
-            }),
-        ),
-    ];
-
-    println!(
-        "test: running {} motor steps at speed={} emit_interval_ms={} motion_duration_s={} pause_duration_s={}",
-        script.len(),
-        speed,
-        emit_interval.as_millis(),
-        motion_duration.as_secs(),
-        pause_duration.as_secs()
-    );
-
-    for (name, intent) in script {
-        println!("test: {name}");
-        run_motion_state(
-            &mut transport,
-            &router,
-            name,
-            intent,
-            motion_duration,
-            emit_interval,
-        )
-        .await?;
-
-        println!("test: sleep 5 seconds");
-        run_motion_state(
-            &mut transport,
-            &router,
-            "sleep",
-            None,
-            pause_duration,
-            emit_interval,
-        )
-        .await?;
-    }
-
-    exchange_with_trace(
-        &mut transport,
-        "stop",
-        router.desired_state_command(Mode::Teleop, None, RouterPolicy::centered_servo()),
-    )
-    .await?;
-    exchange_with_trace(&mut transport, "get-status:final", Command::GetStatus).await?;
-    println!("test: completed successfully");
-
-    Ok(())
-}
-
-async fn exchange_with_trace(
-    transport: &mut BrainTransport,
-    label: &str,
-    command: Command,
-) -> anyhow::Result<()> {
-    println!("tx[{label}]: {:?}", command);
-    let telemetry = transport.exchange_command(command).await?;
-    println!("rx[{label}]: {:?}", telemetry);
-    Ok(())
-}
-
-async fn run_motion_state(
-    transport: &mut BrainTransport,
-    router: &RouterPolicy,
-    label: &str,
-    intent: Option<DriveIntent>,
-    duration: Duration,
-    emit_interval: Duration,
-) -> anyhow::Result<()> {
-    let deadline = Instant::now() + duration;
-    let mut tick = 0usize;
-
-    while Instant::now() < deadline {
-        tick += 1;
-        let command =
-            router.desired_state_command(Mode::Teleop, intent, RouterPolicy::centered_servo());
-        exchange_with_trace(transport, &format!("{label}:{tick}"), command).await?;
-
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
-            break;
-        }
-        tokio::time::sleep(remaining.min(emit_interval)).await;
-    }
-
-    Ok(())
+    test_runner::run(command).await
 }
 
 fn print_config(app_config: &AppConfig) -> anyhow::Result<()> {

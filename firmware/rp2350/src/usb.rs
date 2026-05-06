@@ -6,18 +6,10 @@ use embassy_executor::Spawner;
 use embassy_futures::join::join;
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 use embassy_futures::select::{Either, select};
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-use embassy_rp::gpio::Input;
-#[cfg(all(target_arch = "arm", target_os = "none"))]
-use embassy_rp::gpio::{Level, Output};
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "driver-l298n"))]
-use embassy_rp::pwm::Pwm;
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 use embassy_rp::{bind_interrupts, peripherals, usb};
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-use embassy_time::{Delay, Instant};
 #[cfg(all(target_arch = "arm", target_os = "none"))]
-use embassy_time::{Duration as EmbassyDuration, Timer};
+use embassy_time::{Duration as EmbassyDuration, Instant, Timer};
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 use embassy_usb::{
     Builder, Config,
@@ -26,14 +18,9 @@ use embassy_usb::{
 };
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 use mortimmy_core::CoreError;
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-use mortimmy_drivers::{HcSr04, HcSr04Error, MicrosecondClock, UltrasonicSensor};
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "driver-l298n"))]
-use mortimmy_drivers::{L298nBridge, L298nDriveMotorDriver, L298nSideDriver, MotorDriver};
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 use mortimmy_protocol::messages::{
-    WireMessage,
-    telemetry::{RangeSensorPosition, RangeTelemetry, Telemetry},
+    ControllerMessage, ControllerResponsePayload, ReportPayload, WireMessage,
 };
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 use mortimmy_protocol::{
@@ -43,7 +30,10 @@ use mortimmy_protocol::{
 use static_cell::StaticCell;
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]
-use crate::FirmwareScaffold;
+use crate::{
+    FirmwareScaffold,
+    runtime::{BootMarker, RuntimeHardware},
+};
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 type UsbDriver = embassy_rp::usb::Driver<'static, peripherals::USB>;
@@ -60,6 +50,8 @@ const BOOT_BLINK_DELAY_CYCLES: u32 = 60_000_000;
 const STAGE_BLINK_DELAY_CYCLES: u32 = 30_000_000;
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 const STAGE_BLINK_GAP_CYCLES: u32 = 90_000_000;
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+const USB_BACKGROUND_TICK_MS: u64 = 50;
 #[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
 const ULTRASONIC_POLL_INTERVAL_US: u32 = 60_000;
 #[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
@@ -92,235 +84,7 @@ static FRAME_BUFFER: StaticCell<[u8; MAX_FRAME_BODY_LEN + 1]> = StaticCell::new(
 static FIRMWARE_SCAFFOLD: StaticCell<FirmwareScaffold> = StaticCell::new();
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]
-trait RuntimeHardware {
-    fn sync_with_scaffold(&mut self, scaffold: &mut FirmwareScaffold) -> Result<(), ()>;
-
-    fn enter_fault_state(&mut self, scaffold: &mut FirmwareScaffold, error: Option<CoreError>);
-}
-
-#[cfg(all(target_arch = "arm", target_os = "none"))]
-struct NoopRuntimeHardware;
-
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-#[derive(Clone, Copy, Debug, Default)]
-struct EmbassyMicrosecondClock;
-
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-impl MicrosecondClock for EmbassyMicrosecondClock {
-    fn now_micros(&mut self) -> u32 {
-        Instant::now().as_micros() as u32
-    }
-}
-
-#[cfg(all(target_arch = "arm", target_os = "none"))]
-impl RuntimeHardware for NoopRuntimeHardware {
-    fn sync_with_scaffold(&mut self, _scaffold: &mut FirmwareScaffold) -> Result<(), ()> {
-        Ok(())
-    }
-
-    fn enter_fault_state(&mut self, scaffold: &mut FirmwareScaffold, error: Option<CoreError>) {
-        scaffold.enter_fault_state(error);
-    }
-}
-
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "driver-l298n"))]
-struct MotionDriveHardware<Driver, Ultrasonic = ()> {
-    driver: Driver,
-    #[cfg(feature = "sensor-ultrasonic")]
-    ultrasonic: Ultrasonic,
-    #[cfg(feature = "sensor-ultrasonic")]
-    last_ultrasonic_poll_micros: u32,
-}
-
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "driver-l298n"))]
-impl<Driver, Ultrasonic> MotionDriveHardware<Driver, Ultrasonic> {
-    fn new(driver: Driver, #[cfg(feature = "sensor-ultrasonic")] ultrasonic: Ultrasonic) -> Self {
-        Self {
-            driver,
-            #[cfg(feature = "sensor-ultrasonic")]
-            ultrasonic,
-            #[cfg(feature = "sensor-ultrasonic")]
-            last_ultrasonic_poll_micros: 0,
-        }
-    }
-}
-
-#[cfg(all(
-    target_arch = "arm",
-    target_os = "none",
-    feature = "driver-l298n",
-    not(feature = "sensor-ultrasonic")
-))]
-impl<Driver> RuntimeHardware for MotionDriveHardware<Driver>
-where
-    Driver: MotorDriver,
-{
-    fn sync_with_scaffold(&mut self, scaffold: &mut FirmwareScaffold) -> Result<(), ()> {
-        if scaffold
-            .control
-            .drive
-            .apply_to_driver(&mut self.driver, scaffold.control.limits.max_drive_pwm)
-            .is_err()
-        {
-            defmt::warn!("motion drive hardware sync failed");
-            self.enter_fault_state(scaffold, Some(CoreError::InvalidCommand));
-            return Err(());
-        }
-
-        Ok(())
-    }
-
-    fn enter_fault_state(&mut self, scaffold: &mut FirmwareScaffold, error: Option<CoreError>) {
-        scaffold.enter_fault_state(error);
-
-        if self.driver.stop_all().is_err() {
-            defmt::warn!("motion drive hardware stop failed");
-        }
-    }
-}
-
-#[cfg(all(
-    target_arch = "arm",
-    target_os = "none",
-    feature = "driver-l298n",
-    feature = "sensor-ultrasonic"
-))]
-impl<Driver, UltrasonicLeft, UltrasonicRight, TriggerError, EchoError>
-    MotionDriveHardware<Driver, (UltrasonicLeft, UltrasonicRight)>
-where
-    Driver: MotorDriver,
-    UltrasonicLeft: UltrasonicSensor<Error = HcSr04Error<TriggerError, EchoError>>,
-    UltrasonicRight: UltrasonicSensor<Error = HcSr04Error<TriggerError, EchoError>>,
-{
-    fn poll_ultrasonic(&mut self, scaffold: &mut FirmwareScaffold) {
-        let now_micros = Instant::now().as_micros() as u32;
-        if now_micros.wrapping_sub(self.last_ultrasonic_poll_micros) < ULTRASONIC_POLL_INTERVAL_US {
-            return;
-        }
-
-        self.last_ultrasonic_poll_micros = now_micros;
-        scaffold.sensors.ultrasonic.enabled = true;
-
-        let (forward_left, forward_right) = &mut self.ultrasonic;
-        poll_ultrasonic_sensor(RangeSensorPosition::ForwardLeft, forward_left, scaffold);
-        poll_ultrasonic_sensor(RangeSensorPosition::ForwardRight, forward_right, scaffold);
-    }
-}
-
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-fn poll_ultrasonic_sensor<Ultrasonic, TriggerError, EchoError>(
-    sensor: RangeSensorPosition,
-    ultrasonic: &mut Ultrasonic,
-    scaffold: &mut FirmwareScaffold,
-) where
-    Ultrasonic: UltrasonicSensor<Error = HcSr04Error<TriggerError, EchoError>>,
-{
-    match ultrasonic.measure_range_mm() {
-        Ok(distance) => {
-            let previous = previous_range_sample(scaffold, sensor);
-            let telemetry = scaffold.sensors.record_range(sensor, distance, 100);
-            if should_log_range_sample(previous, telemetry) {
-                defmt::info!(
-                    "ultrasonic sensor={=str} distance_mm={} quality={}",
-                    range_sensor_label(sensor),
-                    telemetry.distance_mm.0,
-                    telemetry.quality,
-                );
-            }
-        }
-        Err(HcSr04Error::OutOfRange(distance)) => {
-            let previous = previous_range_sample(scaffold, sensor);
-            let telemetry = scaffold.sensors.record_range(sensor, distance, 0);
-            if should_log_range_sample(previous, telemetry) {
-                defmt::warn!(
-                    "ultrasonic sensor={=str} out-of-range distance_mm={} quality={}",
-                    range_sensor_label(sensor),
-                    telemetry.distance_mm.0,
-                    telemetry.quality,
-                );
-            }
-        }
-        Err(HcSr04Error::EchoStartTimeout | HcSr04Error::EchoEndTimeout) => {}
-        Err(HcSr04Error::Trigger(_) | HcSr04Error::Echo(_)) => {
-            defmt::warn!(
-                "ultrasonic sensor={=str} gpio read/write failed",
-                range_sensor_label(sensor)
-            );
-        }
-    }
-}
-
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-fn previous_range_sample(
-    scaffold: &FirmwareScaffold,
-    sensor: RangeSensorPosition,
-) -> Option<RangeTelemetry> {
-    match sensor {
-        RangeSensorPosition::ForwardLeft => scaffold.sensors.ultrasonic.ranges.forward_left,
-        RangeSensorPosition::ForwardRight => scaffold.sensors.ultrasonic.ranges.forward_right,
-    }
-}
-
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-const fn range_sensor_label(sensor: RangeSensorPosition) -> &'static str {
-    match sensor {
-        RangeSensorPosition::ForwardLeft => "forward-left",
-        RangeSensorPosition::ForwardRight => "forward-right",
-    }
-}
-
-#[cfg(all(target_arch = "arm", target_os = "none", feature = "sensor-ultrasonic"))]
-fn should_log_range_sample(previous: Option<RangeTelemetry>, current: RangeTelemetry) -> bool {
-    match previous {
-        None => true,
-        Some(previous) => {
-            previous.quality != current.quality
-                || previous.distance_mm.0.abs_diff(current.distance_mm.0) >= ULTRASONIC_LOG_DELTA_MM
-        }
-    }
-}
-
-#[cfg(all(
-    target_arch = "arm",
-    target_os = "none",
-    feature = "driver-l298n",
-    feature = "sensor-ultrasonic"
-))]
-impl<Driver, UltrasonicLeft, UltrasonicRight, TriggerError, EchoError> RuntimeHardware
-    for MotionDriveHardware<Driver, (UltrasonicLeft, UltrasonicRight)>
-where
-    Driver: MotorDriver,
-    UltrasonicLeft: UltrasonicSensor<Error = HcSr04Error<TriggerError, EchoError>>,
-    UltrasonicRight: UltrasonicSensor<Error = HcSr04Error<TriggerError, EchoError>>,
-{
-    fn sync_with_scaffold(&mut self, scaffold: &mut FirmwareScaffold) -> Result<(), ()> {
-        if scaffold
-            .control
-            .drive
-            .apply_to_driver(&mut self.driver, scaffold.control.limits.max_drive_pwm)
-            .is_err()
-        {
-            defmt::warn!("motion drive hardware sync failed");
-            self.enter_fault_state(scaffold, Some(CoreError::InvalidCommand));
-            return Err(());
-        }
-
-        self.poll_ultrasonic(scaffold);
-        Ok(())
-    }
-
-    fn enter_fault_state(&mut self, scaffold: &mut FirmwareScaffold, error: Option<CoreError>) {
-        scaffold.enter_fault_state(error);
-        self.last_ultrasonic_poll_micros = 0;
-
-        if self.driver.stop_all().is_err() {
-            defmt::warn!("motion drive hardware stop failed");
-        }
-    }
-}
-
-#[cfg(all(target_arch = "arm", target_os = "none"))]
-fn blink_stage(marker: &mut Output<'_>, pulses: usize) {
+fn blink_stage(marker: &mut impl BootMarker, pulses: usize) {
     marker.set_low();
     cortex_m::asm::delay(STAGE_BLINK_GAP_CYCLES);
 
@@ -364,7 +128,24 @@ impl UsbTransport {
 #[cfg(all(target_arch = "arm", target_os = "none"))]
 pub async fn run_runtime(_spawner: Spawner) -> ! {
     let peripherals = embassy_rp::init(Default::default());
-    let mut boot_marker = Output::new(peripherals.PIN_25, Level::Low);
+
+    #[cfg(feature = "board-motion-controller")]
+    let crate::runtime::BoardRuntime {
+        usb,
+        mut boot_marker,
+        mut hardware,
+        usb_product,
+        usb_serial_number,
+    } = crate::runtime::motion::build_runtime(peripherals);
+    #[cfg(feature = "board-audio-controller")]
+    let crate::runtime::BoardRuntime {
+        usb,
+        mut boot_marker,
+        mut hardware,
+        usb_product,
+        usb_serial_number,
+    } = crate::runtime::audio::build_runtime(peripherals);
+
     for _ in 0..4 {
         boot_marker.set_high();
         cortex_m::asm::delay(BOOT_BLINK_DELAY_CYCLES);
@@ -373,13 +154,13 @@ pub async fn run_runtime(_spawner: Spawner) -> ! {
     }
     boot_marker.set_high();
 
-    let driver = embassy_rp::usb::Driver::new(peripherals.USB, Irqs);
+    let driver = embassy_rp::usb::Driver::new(usb, Irqs);
     blink_stage(&mut boot_marker, 1);
 
     let mut config = Config::new(USB_VENDOR_ID, USB_PRODUCT_ID);
     config.manufacturer = Some("mortimmy");
-    config.product = Some("mortimmy USB serial");
-    config.serial_number = Some("mortimmy-rp2350");
+    config.product = Some(usb_product);
+    config.serial_number = Some(usb_serial_number);
     config.max_power = 100;
     config.max_packet_size_0 = 64;
 
@@ -409,110 +190,6 @@ pub async fn run_runtime(_spawner: Spawner) -> ! {
     let payload_buffer = PAYLOAD_BUFFER.init([0; MAX_PAYLOAD_LEN]);
     let frame_buffer = FRAME_BUFFER.init([0; MAX_FRAME_BODY_LEN + 1]);
     let scaffold = FIRMWARE_SCAFFOLD.init(FirmwareScaffold::default());
-    #[cfg(all(feature = "driver-l298n", feature = "sensor-ultrasonic"))]
-    let mut hardware = MotionDriveHardware::new(
-        L298nDriveMotorDriver::new(
-            L298nSideDriver::new(
-                L298nBridge::new(
-                    Output::new(peripherals.PIN_3, Level::Low),
-                    Output::new(peripherals.PIN_4, Level::Low),
-                    Pwm::new_output_a(
-                        peripherals.PWM_SLICE1,
-                        peripherals.PIN_2,
-                        Default::default(),
-                    ),
-                ),
-                L298nBridge::new(
-                    Output::new(peripherals.PIN_5, Level::Low),
-                    Output::new(peripherals.PIN_6, Level::Low),
-                    Pwm::new_output_b(
-                        peripherals.PWM_SLICE3,
-                        peripherals.PIN_7,
-                        Default::default(),
-                    ),
-                ),
-            ),
-            L298nSideDriver::new(
-                L298nBridge::new(
-                    Output::new(peripherals.PIN_9, Level::Low),
-                    Output::new(peripherals.PIN_10, Level::Low),
-                    Pwm::new_output_a(
-                        peripherals.PWM_SLICE4,
-                        peripherals.PIN_8,
-                        Default::default(),
-                    ),
-                ),
-                L298nBridge::new(
-                    Output::new(peripherals.PIN_11, Level::Low),
-                    Output::new(peripherals.PIN_12, Level::Low),
-                    Pwm::new_output_b(
-                        peripherals.PWM_SLICE6,
-                        peripherals.PIN_13,
-                        Default::default(),
-                    ),
-                ),
-            ),
-        ),
-        (
-            HcSr04::new(
-                Output::new(peripherals.PIN_14, Level::Low),
-                Input::new(peripherals.PIN_15, embassy_rp::gpio::Pull::None),
-                Delay,
-                EmbassyMicrosecondClock,
-            ),
-            HcSr04::new(
-                Output::new(peripherals.PIN_16, Level::Low),
-                Input::new(peripherals.PIN_17, embassy_rp::gpio::Pull::None),
-                Delay,
-                EmbassyMicrosecondClock,
-            ),
-        ),
-    );
-    #[cfg(all(feature = "driver-l298n", not(feature = "sensor-ultrasonic")))]
-    let mut hardware = MotionDriveHardware::new(L298nDriveMotorDriver::new(
-        L298nSideDriver::new(
-            L298nBridge::new(
-                Output::new(peripherals.PIN_3, Level::Low),
-                Output::new(peripherals.PIN_4, Level::Low),
-                Pwm::new_output_a(
-                    peripherals.PWM_SLICE1,
-                    peripherals.PIN_2,
-                    Default::default(),
-                ),
-            ),
-            L298nBridge::new(
-                Output::new(peripherals.PIN_5, Level::Low),
-                Output::new(peripherals.PIN_6, Level::Low),
-                Pwm::new_output_b(
-                    peripherals.PWM_SLICE3,
-                    peripherals.PIN_7,
-                    Default::default(),
-                ),
-            ),
-        ),
-        L298nSideDriver::new(
-            L298nBridge::new(
-                Output::new(peripherals.PIN_9, Level::Low),
-                Output::new(peripherals.PIN_10, Level::Low),
-                Pwm::new_output_a(
-                    peripherals.PWM_SLICE4,
-                    peripherals.PIN_8,
-                    Default::default(),
-                ),
-            ),
-            L298nBridge::new(
-                Output::new(peripherals.PIN_11, Level::Low),
-                Output::new(peripherals.PIN_12, Level::Low),
-                Pwm::new_output_b(
-                    peripherals.PWM_SLICE6,
-                    peripherals.PIN_13,
-                    Default::default(),
-                ),
-            ),
-        ),
-    ));
-    #[cfg(not(feature = "driver-l298n"))]
-    let mut hardware = NoopRuntimeHardware;
     let usb_fut = device.run();
     let link_fut = async move {
         loop {
@@ -547,27 +224,63 @@ async fn usb_link_session(
     hardware: &mut impl RuntimeHardware,
 ) -> Result<(), EndpointError> {
     let mut rx_packet = [0u8; USB_MAX_PACKET_SIZE];
+    let mut last_host_activity = Instant::now();
     *decoder = FrameDecoder::default();
 
     loop {
         let timeout_ms = u64::from(scaffold.control.limits.link_timeout_ms.0.max(1));
         let received = match select(
             receiver.read_packet(&mut rx_packet),
-            Timer::after(EmbassyDuration::from_millis(timeout_ms)),
+            Timer::after(EmbassyDuration::from_millis(USB_BACKGROUND_TICK_MS)),
         )
         .await
         {
-            Either::First(Ok(received)) => received,
+            Either::First(Ok(received)) => {
+                last_host_activity = Instant::now();
+                received
+            }
             Either::First(Err(error)) => {
                 hardware.enter_fault_state(scaffold, Some(CoreError::LinkTimedOut));
                 return Err(error);
             }
             Either::Second(()) => {
-                hardware.enter_fault_state(scaffold, Some(CoreError::LinkTimedOut));
-                defmt::warn!(
-                    "usb cdc link timeout expired after {} ms",
-                    timeout_ms as u32
-                );
+                let now = Instant::now();
+                if now
+                    .as_millis()
+                    .saturating_sub(last_host_activity.as_millis())
+                    >= timeout_ms
+                {
+                    hardware.enter_fault_state(scaffold, Some(CoreError::LinkTimedOut));
+                    defmt::warn!(
+                        "usb cdc link timeout expired after {} ms",
+                        timeout_ms as u32
+                    );
+                    last_host_activity = now;
+                    continue;
+                }
+
+                if hardware.sync_with_scaffold(scaffold).is_err() {
+                    continue;
+                }
+
+                let Some(message) = scaffold.next_background_message(now.as_millis()) else {
+                    continue;
+                };
+                scaffold.link_tx.record_message(&message);
+
+                if let Err(error) = send_wire_message(
+                    sender,
+                    payload_buffer,
+                    frame_buffer,
+                    scaffold.link_tx.sequence,
+                    &WireMessage::Controller(message),
+                )
+                .await
+                {
+                    hardware.enter_fault_state(scaffold, Some(CoreError::LinkTimedOut));
+                    return Err(error);
+                }
+
                 continue;
             }
         };
@@ -591,50 +304,34 @@ async fn usb_link_session(
             };
 
             match &message {
-                WireMessage::Command(command) => {
-                    defmt::info!("usb cdc command={=str}", command.kind());
+                WireMessage::Host(message) => {
+                    defmt::info!("usb cdc host message={=str}", message.kind());
                 }
-                WireMessage::Telemetry(telemetry) => {
+                WireMessage::Controller(message) => {
                     defmt::warn!(
-                        "usb cdc unexpected inbound telemetry={=str}",
-                        telemetry.kind()
+                        "usb cdc unexpected inbound controller message={=str}",
+                        message.kind()
                     );
                 }
             }
 
             let mut response = scaffold.apply_wire_message(message);
-            if hardware.sync_with_scaffold(scaffold).is_err() {
-                response = Some(WireMessage::Telemetry(Telemetry::Status(
-                    scaffold.status_telemetry(),
-                )));
-            } else {
-                refresh_response_telemetry(&mut response, scaffold);
-            }
+            let _ = hardware.sync_with_scaffold(scaffold);
+            refresh_response_message(&mut response, scaffold);
 
             let Some(response) = response else {
                 continue;
             };
 
-            if let WireMessage::Telemetry(telemetry) = &response {
-                defmt::info!("usb cdc telemetry={=str}", telemetry.kind());
-            }
-
-            let payload = match encode_message(&response, payload_buffer) {
-                Ok(payload) => payload,
-                Err(_) => {
-                    defmt::warn!("usb cdc response encode error");
-                    continue;
-                }
-            };
-            let encoded = match wrap_payload(payload, scaffold.link_tx.sequence, frame_buffer) {
-                Ok(encoded) => encoded,
-                Err(_) => {
-                    defmt::warn!("usb cdc response frame error");
-                    continue;
-                }
-            };
-
-            if let Err(error) = write_frame(sender, encoded).await {
+            if let Err(error) = send_wire_message(
+                sender,
+                payload_buffer,
+                frame_buffer,
+                scaffold.link_tx.sequence,
+                &response,
+            )
+            .await
+            {
                 hardware.enter_fault_state(scaffold, Some(CoreError::LinkTimedOut));
                 return Err(error);
             }
@@ -643,19 +340,61 @@ async fn usb_link_session(
 }
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]
-fn refresh_response_telemetry(response: &mut Option<WireMessage>, scaffold: &FirmwareScaffold) {
-    let Some(WireMessage::Telemetry(telemetry)) = response.as_mut() else {
-        return;
+async fn send_wire_message(
+    sender: &mut Sender<'static, UsbDriver>,
+    payload_buffer: &mut [u8; MAX_PAYLOAD_LEN],
+    frame_buffer: &mut [u8; MAX_FRAME_BODY_LEN + 1],
+    sequence: u16,
+    message: &WireMessage,
+) -> Result<(), EndpointError> {
+    if let WireMessage::Controller(message) = message {
+        defmt::info!("usb cdc controller message={=str}", message.kind());
+    }
+
+    let payload = match encode_message(message, payload_buffer) {
+        Ok(payload) => payload,
+        Err(_) => {
+            defmt::warn!("usb cdc response encode error");
+            return Ok(());
+        }
+    };
+    let encoded = match wrap_payload(payload, sequence, frame_buffer) {
+        Ok(encoded) => encoded,
+        Err(_) => {
+            defmt::warn!("usb cdc response frame error");
+            return Ok(());
+        }
     };
 
-    *telemetry = match *telemetry {
-        Telemetry::Status(_) => Telemetry::Status(scaffold.status_telemetry()),
-        Telemetry::DesiredState(_) => Telemetry::DesiredState(scaffold.desired_state_telemetry()),
-        other => other,
-    };
+    write_frame(sender, encoded).await
 }
 
 #[cfg(all(target_arch = "arm", target_os = "none"))]
+/// Refresh response payloads that mirror scaffold state after the live hardware sync step.
+fn refresh_response_message(response: &mut Option<WireMessage>, scaffold: &FirmwareScaffold) {
+    let Some(WireMessage::Controller(message)) = response.as_mut() else {
+        return;
+    };
+
+    match message {
+        ControllerMessage::Response(response) => {
+            if matches!(response.payload, ControllerResponsePayload::ControllerStatus(_)) {
+                response.payload =
+                    ControllerResponsePayload::ControllerStatus(scaffold.controller_status());
+            }
+        }
+        ControllerMessage::Report(report) => {
+            if let ReportPayload::ControlApplied(applied) = report.payload {
+                report.payload =
+                    ReportPayload::ControlApplied(scaffold.control_applied_report(applied.control_generation));
+            }
+        }
+        ControllerMessage::Event(_) => {}
+    }
+}
+
+#[cfg(all(target_arch = "arm", target_os = "none"))]
+/// Write one already framed controller `frame` over USB CDC.
 async fn write_frame(
     sender: &mut Sender<'static, UsbDriver>,
     frame: &[u8],

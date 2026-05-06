@@ -41,10 +41,14 @@ This is a standard 16x2 character LCD module in the HD44780 family. I could not 
 
 ## How it is used in this project
 
-The display is wired in 4-bit write-only mode:
+The display is wired in 4-bit write-only mode from the motion-controller Pico LiPo 2:
 
-- `RS` and `E` go to Pico GPIO
-- `D4` to `D7` carry the 4-bit data bus
+- `RS` is on `GP20`
+- `E` is on `GP21`
+- `D4` is on `GP22`
+- `D5` is on `GP26`
+- `D6` is on `GP27`
+- `D7` is on `GP28`
 - `RW` is tied to ground
 - `D0` to `D3` are left unconnected
 - `VO` is driven by a 10 kOhm contrast potentiometer

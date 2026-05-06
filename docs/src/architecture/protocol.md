@@ -17,48 +17,56 @@ The shared protocol is the contract between the Raspberry Pi host and the RP2350
 
 This lets the host and firmware recover from partial reads, framing loss, and captured-stream replay without introducing heap allocation.
 
-The protocol now runs in two concrete bring-up modes:
+The protocol runs in two concrete bring-up modes:
 
 - loopback, where the host exchanges framed bytes with `FirmwareScaffold` in-process
-- live USB CDC, where the RP2350 Embassy task reads framed bytes from the CDC ACM class and writes telemetry responses back to the host serial backend
+- live USB CDC, where the RP2350 Embassy task reads framed bytes from the CDC ACM class and writes controller messages back to the host serial backend
 
 The Rust API is grouped the same way:
 
-- `mortimmy_protocol::messages::commands` contains host-to-firmware command types
-- `mortimmy_protocol::messages::telemetry` contains firmware-to-host telemetry types plus related capability/status enums
+- `mortimmy_protocol::messages::host` contains host-originated control and request envelopes
+- `mortimmy_protocol::messages::commands` contains reusable desired-state, parameter, audio, and Trellis payload types
+- `mortimmy_protocol::messages::controller` contains controller-originated response, report, and event envelopes
+- `mortimmy_protocol::messages::telemetry` contains the reusable controller status, control-applied, range, battery, audio, and keypad payload types
 
-## Current Message Families
+## Message Families
 
-Host-to-firmware traffic is now split into two semantic families:
+Host-to-firmware traffic is split into two semantic families:
 
-- continuous desired-state snapshots through `Command::SetDesiredState`
-- one-shot actions such as `Ping`, `SetParam`, `PlayAudio`, and `SetTrellisLeds`
+- latest-wins control through `HostMessage::Control`
+- correlated one-shot requests through `HostMessage::Request`
 
-The desired-state message is a full snapshot:
+The continuous-control envelope includes:
 
-- `mode`
-- `drive`
-- `servo`
+- `generation`
+- a full desired-state snapshot containing `mode`, `drive`, and `servo`
 
 The host owns that snapshot and resends it while continuous control is active. The firmware treats it as latest-wins state rather than as a queue of imperative motion commands.
 
 Host-to-firmware command coverage therefore includes:
 
 - full desired-state updates for teleop and autonomous control
+- explicit controller status requests through `GetControllerStatus`
 - typed parameter updates for safety limits and subsystem tuning
 - audio chunk forwarding for the Pico Audio Pack
 - Trellis LED updates
-- explicit status requests through `GetStatus`
-- link-health `ping`
+- report cadence configuration through `ConfigureReports`
 
-Firmware-to-host telemetry covers:
+Controller-to-host traffic is split into three semantic families:
 
-- desired-state acknowledgements containing the applied mode, drive state, servo state, and last control-plane error
-- status snapshots with mode, link quality, and the last control-plane error
-- range and battery measurements
-- audio queue state
-- Trellis pad events
-- `pong` replies
+- `ControllerMessage::Response` for correlated replies to host requests
+- `ControllerMessage::Report` for decoupled controller-originated data with independent cadence
+- `ControllerMessage::Event` for immediate controller-originated events
+
+The main controller data products are:
+
+- `ControllerStatus`, returned as a request response and scoped to controller identity and health only
+- `ControlAppliedReport`, emitted as a report with applied mode, drive state, servo state, last control-plane error, and the last applied control `generation`
+- range and battery measurements as dedicated reports
+- audio queue state as a dedicated report or request response
+- Trellis pad input as a controller event
+
+Status snapshots do not embed range data, and control-applied reports do not duplicate sensor snapshots. Sensor data has its own report path.
 
 ## Why Full Desired State messages?
 
@@ -69,7 +77,7 @@ The control message is intentionally a full message rather than a field patch.
 - `teleop + zero drive` stays distinct from `fault`, which owns timeout and safe-stop recovery.
 - Tests can assert one idempotent apply path instead of reasoning about ordering between `SetMode`, `Drive`, `Servo`, and `Stop`.
 
-If payload pressure ever becomes real, an explicit patch message can be added later. For the current control surface, the simpler model is the safer one.
+For this control surface, the full-snapshot model keeps merge semantics simple and safe.
 
 ## Teleop Sequence
 
@@ -82,30 +90,25 @@ sequenceDiagram
 
 	Input->>Brain: ControlState { drive = forward + left }
 	Brain->>Brain: Merge into desired state
-	Brain->>Bridge: Command::SetDesiredState(Teleop, drive, servo)
-	Bridge->>FW: WireMessage::Command(...)
+	Brain->>Bridge: HostMessage::Control(generation, desired_state)
+	Bridge->>FW: WireMessage::Host(...)
 	FW->>FW: apply_desired_state(latest wins)
-	FW-->>Bridge: Telemetry::DesiredState(...)
-	Bridge-->>Brain: DesiredStateTelemetry
+	FW-->>Bridge: ControllerMessage::Report(ControlAppliedReport)
+	Bridge-->>Brain: ControlAppliedReport
 ```
 
-## Mixed Ping Sequence
+## Status Request Sequence
 
-`Ping` remains a one-shot command, but it no longer owns motion state. The host keeps the latest desired snapshot and resumes refreshing it after the one-shot roundtrip completes.
+Status reads are explicit correlated requests rather than being coupled to control acknowledgements.
 
 ```mermaid
 sequenceDiagram
-	participant Input as Keyboard Input
 	participant Brain as RobotBrain
 	participant FW as Firmware
 
-	Input->>Brain: Hold forward
-	Brain->>FW: SetDesiredState(Teleop, drive=forward)
-	Input->>Brain: Ping
-	Brain->>FW: Ping
-	FW-->>Brain: Pong
-	Brain->>Brain: Re-arm held control lease
-	Brain->>FW: SetDesiredState(Teleop, drive=forward)
+	Brain->>FW: HostMessage::Request(request_id, GetControllerStatus)
+	FW-->>Brain: ControllerMessage::Response(request_id, ControllerStatus)
+	FW-->>Brain: ControllerMessage::Report(Range or Battery) %% may interleave independently
 ```
 
 ## Audio Chunk Contract
@@ -121,14 +124,15 @@ The firmware scaffold applies protocol traffic directly into the control, audio,
 Continuous control has a single apply path:
 
 - `ControlLoop::apply_desired_state` owns the combined mode, drive, and servo update
-- `FirmwareScaffold::handle_command` acknowledges that path with `Telemetry::DesiredState`
+- `FirmwareScaffold::handle_host_message` maps host control traffic into that path and emits `ControlAppliedReport`
 - the latest desired state replaces the previous desired state instead of stacking multiple motion commands
 
 - limit-related parameter updates change the embedded control loop and watchdog budget
 - audio and Trellis parameter updates reconfigure the corresponding scaffold tasks
-- accepted commands emit immediate state telemetry where that is useful for bring-up tests
-- invalid control data is surfaced as `CoreError::InvalidCommand` in status telemetry
+- correlated requests emit explicit controller responses
+- range, battery, audio queue state, and controller-originated data use dedicated report or event paths instead of being embedded into status snapshots
+- invalid control data is surfaced as `CoreError::InvalidCommand` in the corresponding response or control-applied report
 
-This is still scaffold-level behavior rather than the full executor-driven runtime, but it means the shared protocol is now executable inside the firmware crate rather than existing only as schema definitions.
+`FirmwareScaffold` is the shared apply surface used by unit tests and the live USB CDC runtime, so the protocol is executable inside the firmware crate rather than existing only as schema definitions.
 
-On the host side, the keyboard backend and autonomous runner now drive this same protocol path through the brain loop. Sustained control is expressed as one desired snapshot rather than a sequence of imperative motion messages.
+On the host side, the keyboard backend and autonomous runner drive this same protocol path through the brain loop. Sustained control is expressed as one desired snapshot rather than a sequence of imperative motion messages.

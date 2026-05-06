@@ -2,7 +2,7 @@
 
 use mortimmy_core::{DEFAULT_LIMITS, Mode, PwmTicks, RobotLimits, ServoTicks};
 use mortimmy_protocol::messages::{
-    command::Command,
+    ControlMessage, RequestPayload,
     commands::{DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand},
 };
 
@@ -43,19 +43,20 @@ impl RouterPolicy {
         }
     }
 
-    /// Build a full desired control snapshot from the current host-owned state.
+    /// Build a full desired control snapshot for `generation`, `mode`, `drive`, and `servo`.
     pub fn desired_state_command(
         &self,
+        generation: u32,
         mode: Mode,
         drive: Option<DriveIntent>,
         servo: ServoCommand,
-    ) -> Command {
+    ) -> ControlMessage {
         let drive = match drive {
             Some(intent) => self.drive_intent(intent),
             None => self.clamp_drive(0, 0),
         };
 
-        Command::SetDesiredState(DesiredStateCommand::new(mode, drive, servo))
+        ControlMessage::new(generation, DesiredStateCommand::new(mode, drive, servo))
     }
 
     /// Convert a normalized drive intent into differential motor PWM values.
@@ -85,9 +86,9 @@ impl RouterPolicy {
         self.clamp_drive(scaled_left as i16, scaled_right as i16)
     }
 
-    /// Build a command that updates the firmware link timeout.
-    pub const fn link_timeout_update(milliseconds: u32) -> Command {
-        Command::SetParam(ParameterUpdate {
+    /// Build a request payload that updates the firmware link timeout to `milliseconds`.
+    pub const fn link_timeout_update(milliseconds: u32) -> RequestPayload {
+        RequestPayload::SetParam(ParameterUpdate {
             key: ParameterKey::LinkTimeoutMs,
             value: milliseconds as i32,
         })
@@ -97,10 +98,8 @@ impl RouterPolicy {
 #[cfg(test)]
 mod tests {
     use mortimmy_core::{Mode, ServoTicks};
-    use mortimmy_protocol::messages::command::Command;
-    use mortimmy_protocol::messages::commands::{
-        DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand,
-    };
+    use mortimmy_protocol::messages::{ControlMessage, RequestPayload};
+    use mortimmy_protocol::messages::commands::{DesiredStateCommand, DriveCommand, ParameterKey, ParameterUpdate, ServoCommand};
 
     use crate::input::DriveIntent;
 
@@ -128,7 +127,7 @@ mod tests {
     fn builds_control_messages() {
         assert_eq!(
             RouterPolicy::link_timeout_update(750),
-            Command::SetParam(ParameterUpdate {
+            RequestPayload::SetParam(ParameterUpdate {
                 key: ParameterKey::LinkTimeoutMs,
                 value: 750,
             })
@@ -153,6 +152,7 @@ mod tests {
 
         assert_eq!(
             router.desired_state_command(
+                9,
                 Mode::Teleop,
                 Some(DriveIntent {
                     forward: DriveIntent::AXIS_MAX,
@@ -161,17 +161,20 @@ mod tests {
                 }),
                 RouterPolicy::centered_servo(),
             ),
-            Command::SetDesiredState(DesiredStateCommand::new(
-                Mode::Teleop,
-                DriveCommand {
-                    left: mortimmy_core::PwmTicks(300),
-                    right: mortimmy_core::PwmTicks(300),
-                },
-                ServoCommand {
-                    pan: ServoTicks(0),
-                    tilt: ServoTicks(0),
-                },
-            ))
+            ControlMessage::new(
+                9,
+                DesiredStateCommand::new(
+                    Mode::Teleop,
+                    DriveCommand {
+                        left: mortimmy_core::PwmTicks(300),
+                        right: mortimmy_core::PwmTicks(300),
+                    },
+                    ServoCommand {
+                        pan: ServoTicks(0),
+                        tilt: ServoTicks(0),
+                    },
+                ),
+            )
         );
 
         assert_eq!(

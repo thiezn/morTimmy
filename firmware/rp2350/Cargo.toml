@@ -18,8 +18,9 @@ board-motion-controller = [
     "capability-servo",
     "driver-l298n",
     "sensor-ultrasonic",
+    "ui-display",
 ]
-board-audio-controller = ["capability-audio-output", "ui-display"]
+board-audio-controller = ["capability-audio-output"]
 capability-drive = ["mortimmy-protocol/capability-drive"]
 capability-servo = ["mortimmy-protocol/capability-servo"]
 capability-audio-output = []
@@ -30,6 +31,7 @@ sensor-battery = []
 ui-display = []
 
 [dependencies]
+heapless.workspace = true
 mortimmy-core = { path = "../../crates/core" }
 mortimmy-deploy = { path = "../../crates/deploy" }
 mortimmy-drivers = { path = "../../crates/drivers" }
@@ -58,4 +60,3 @@ panic-probe = { version = "1", features = ["print-defmt"] }
 static_cell = "2"
 
 [dev-dependencies]
-heapless.workspace = true

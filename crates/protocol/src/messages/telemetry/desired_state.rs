@@ -11,7 +11,7 @@ use serde::{
     ser::SerializeTuple,
 };
 
-use super::{ForwardRangeTelemetry, drive::MotorStateTelemetry, servo::ServoStateTelemetry};
+use super::{drive::MotorStateTelemetry, servo::ServoStateTelemetry};
 
 #[cfg(not(feature = "capability-drive"))]
 const fn default_drive_telemetry() -> MotorStateTelemetry {
@@ -30,37 +30,37 @@ const fn default_servo_telemetry() -> ServoStateTelemetry {
     }
 }
 
-/// Immediate acknowledgement of the latest applied desired-control state.
+/// Last applied desired-control state reported by the controller.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct DesiredStateTelemetry {
+pub struct ControlAppliedReport {
+    pub control_generation: u32,
     pub mode: Mode,
     #[cfg(feature = "capability-drive")]
     pub drive: MotorStateTelemetry,
     #[cfg(feature = "capability-servo")]
     pub servo: ServoStateTelemetry,
     pub error: Option<CoreError>,
-    pub ranges: ForwardRangeTelemetry,
 }
 
-impl DesiredStateTelemetry {
+impl ControlAppliedReport {
     pub const fn new(
+        control_generation: u32,
         mode: Mode,
         drive: MotorStateTelemetry,
         servo: ServoStateTelemetry,
         error: Option<CoreError>,
-        ranges: ForwardRangeTelemetry,
     ) -> Self {
         let _ = drive;
         let _ = servo;
 
         Self {
+            control_generation,
             mode,
             #[cfg(feature = "capability-drive")]
             drive,
             #[cfg(feature = "capability-servo")]
             servo,
             error,
-            ranges,
         }
     }
 
@@ -87,60 +87,66 @@ impl DesiredStateTelemetry {
     }
 }
 
-impl Serialize for DesiredStateTelemetry {
+impl Serialize for ControlAppliedReport {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
     {
         let mut tuple = serializer.serialize_tuple(5)?;
+        tuple.serialize_element(&self.control_generation)?;
         tuple.serialize_element(&self.mode)?;
         tuple.serialize_element(&self.drive())?;
         tuple.serialize_element(&self.servo())?;
         tuple.serialize_element(&self.error)?;
-        tuple.serialize_element(&self.ranges)?;
         tuple.end()
     }
 }
 
-impl<'de> Deserialize<'de> for DesiredStateTelemetry {
+impl<'de> Deserialize<'de> for ControlAppliedReport {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        deserializer.deserialize_tuple(5, DesiredStateTelemetryVisitor)
+        deserializer.deserialize_tuple(5, ControlAppliedReportVisitor)
     }
 }
 
-struct DesiredStateTelemetryVisitor;
+struct ControlAppliedReportVisitor;
 
-impl<'de> Visitor<'de> for DesiredStateTelemetryVisitor {
-    type Value = DesiredStateTelemetry;
+impl<'de> Visitor<'de> for ControlAppliedReportVisitor {
+    type Value = ControlAppliedReport;
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a desired state telemetry tuple")
+        formatter.write_str("a control applied report tuple")
     }
 
     fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
     where
         A: SeqAccess<'de>,
     {
-        let mode = seq
+        let control_generation = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(0, &self))?;
-        let drive = seq
+        let mode = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(1, &self))?;
-        let servo = seq
+        let drive = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(2, &self))?;
-        let error = seq
+        let servo = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(3, &self))?;
-        let ranges = seq
+        let error = seq
             .next_element()?
             .ok_or_else(|| de::Error::invalid_length(4, &self))?;
 
-        Ok(DesiredStateTelemetry::new(mode, drive, servo, error, ranges))
+        Ok(ControlAppliedReport::new(
+            control_generation,
+            mode,
+            drive,
+            servo,
+            error,
+        ))
     }
 }
 
@@ -148,10 +154,8 @@ impl<'de> Visitor<'de> for DesiredStateTelemetryVisitor {
 mod tests {
     use mortimmy_core::{Mode, PwmTicks, ServoTicks};
 
-    use super::DesiredStateTelemetry;
-    use crate::messages::telemetry::{
-        ForwardRangeTelemetry, MotorStateTelemetry, ServoStateTelemetry,
-    };
+    use super::ControlAppliedReport;
+    use crate::messages::telemetry::{MotorStateTelemetry, ServoStateTelemetry};
 
     #[cfg(not(feature = "capability-drive"))]
     use super::default_drive_telemetry;
@@ -159,7 +163,7 @@ mod tests {
     use super::default_servo_telemetry;
 
     #[test]
-    fn desired_state_telemetry_accessors_stay_defined_across_feature_sets() {
+    fn control_applied_report_accessors_stay_defined_across_feature_sets() {
         let drive = MotorStateTelemetry {
             left_pwm: PwmTicks(120),
             right_pwm: PwmTicks(-80),
@@ -169,12 +173,12 @@ mod tests {
             pan: ServoTicks(24),
             tilt: ServoTicks(36),
         };
-        let telemetry = DesiredStateTelemetry::new(
+        let telemetry = ControlAppliedReport::new(
+            7,
             Mode::Teleop,
             drive,
             servo,
             None,
-            ForwardRangeTelemetry::default(),
         );
 
         #[cfg(feature = "capability-drive")]
@@ -186,7 +190,6 @@ mod tests {
         assert_eq!(telemetry.servo(), servo);
         #[cfg(not(feature = "capability-servo"))]
         assert_eq!(telemetry.servo(), default_servo_telemetry());
-
-        assert_eq!(telemetry.ranges, ForwardRangeTelemetry::default());
+        assert_eq!(telemetry.control_generation, 7);
     }
 }

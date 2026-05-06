@@ -3,7 +3,7 @@
 use clap::ValueEnum;
 use heapless::Vec as HeaplessVec;
 use mortimmy_protocol::messages::{
-    command::Command,
+    RequestPayload,
     commands::{AUDIO_CHUNK_CAPACITY_SAMPLES, AudioChunkCommand, AudioEncoding},
 };
 use serde::{Deserialize, Serialize};
@@ -117,13 +117,13 @@ impl AudioSubsystem {
         }
     }
 
-    /// Split a waveform into protocol `PlayAudio` commands for the firmware bridge.
+    /// Split `waveform` into protocol `PlayAudio` requests for `utterance_id`.
     #[allow(dead_code)]
-    pub fn build_audio_commands(
+    pub fn build_audio_requests(
         &self,
         utterance_id: u32,
         waveform: &[i16],
-    ) -> Result<Vec<Command>, AudioPlanError> {
+    ) -> Result<Vec<RequestPayload>, AudioPlanError> {
         if !self.config.enabled {
             return Err(AudioPlanError::Disabled);
         }
@@ -143,7 +143,7 @@ impl AudioSubsystem {
                 .extend_from_slice(chunk)
                 .map_err(|_| AudioPlanError::ChunkTooLarge)?;
 
-            commands.push(Command::PlayAudio(AudioChunkCommand {
+            commands.push(RequestPayload::PlayAudio(AudioChunkCommand {
                 utterance_id,
                 chunk_index: u16::try_from(chunk_index)
                     .map_err(|_| AudioPlanError::TooManyChunks)?,
@@ -161,7 +161,7 @@ impl AudioSubsystem {
 
 #[cfg(test)]
 mod tests {
-    use mortimmy_protocol::messages::{command::Command, commands::AUDIO_CHUNK_CAPACITY_SAMPLES};
+    use mortimmy_protocol::messages::{RequestPayload, commands::AUDIO_CHUNK_CAPACITY_SAMPLES};
 
     use super::{AudioBackendKind, AudioConfig, AudioPlanError, AudioSubsystem};
 
@@ -192,7 +192,7 @@ mod tests {
     }
 
     #[test]
-    fn chunks_waveform_into_protocol_audio_commands() {
+    fn chunks_waveform_into_protocol_audio_requests() {
         let subsystem = AudioSubsystem::from_config(AudioConfig {
             enabled: true,
             backend: AudioBackendKind::FirmwareBridge,
@@ -200,17 +200,17 @@ mod tests {
         });
         let waveform = vec![7i16; AUDIO_CHUNK_CAPACITY_SAMPLES * 2 + 12];
 
-        let commands = subsystem.build_audio_commands(11, &waveform).unwrap();
+        let commands = subsystem.build_audio_requests(11, &waveform).unwrap();
 
         assert_eq!(commands.len(), 3);
-        assert!(matches!(commands[0], Command::PlayAudio(_)));
+        assert!(matches!(commands[0], RequestPayload::PlayAudio(_)));
         match &commands[2] {
-            Command::PlayAudio(command) => {
+            RequestPayload::PlayAudio(command) => {
                 assert_eq!(command.chunk_index, 2);
                 assert!(command.is_final_chunk);
                 assert_eq!(command.samples.len(), 12);
             }
-            other => panic!("unexpected command: {other:?}"),
+            other => panic!("unexpected request: {other:?}"),
         }
     }
 
@@ -219,7 +219,7 @@ mod tests {
         let subsystem = AudioSubsystem::from_config(AudioConfig::default());
 
         assert_eq!(
-            subsystem.build_audio_commands(1, &[1, 2, 3]),
+            subsystem.build_audio_requests(1, &[1, 2, 3]),
             Err(AudioPlanError::Disabled)
         );
     }
